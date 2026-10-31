@@ -28,18 +28,20 @@ Deliberately not used: LangChain/LangGraph/LlamaIndex, vector DBs, Postgres, age
 
 ## Commands
 
-Exact commands are established during Phase 1 scaffolding and recorded here. Expected shape:
+Verified green in Phase 1 deliverable 1 (scaffold). Run backend commands from `backend/`, frontend commands from `frontend/`.
 
 ```bash
 # Backend (from backend/)
-pytest                  # run tests
-ruff check . && ruff format --check .   # lint/format
-uvicorn app.main:app --reload           # dev server
+uv sync                # install/lock environment (creates .venv, uv.lock)
+uv run pytest          # run tests
+uv run ruff check . && uv run ruff format --check .   # lint/format
+uv run mypy app        # typecheck (non-strict)
+uv run uvicorn app.main:create_app --factory --reload  # dev server
 
 # Frontend (from frontend/)
-npm run dev             # dev server
-npm run build           # production build
-npm test                # tests
+npm run dev            # dev server (http://localhost:5173)
+npm run build          # typecheck (tsc -b) + production build
+npm test -- --run      # tests, single run (vitest)
 ```
 
 ---

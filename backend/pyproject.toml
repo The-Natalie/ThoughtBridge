@@ -1,0 +1,40 @@
+[project]
+name = "thoughtbridge-backend"
+version = "0.1.0"
+description = "ThoughtBridge backend — FastAPI + SQLite RAG API (hackathon MVP)"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi[standard]>=0.136",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.9",
+    "sqlite-vec>=0.1",
+    "fastembed",
+    "python-multipart",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+    "ruff",
+    "mypy",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+
+[[tool.mypy.overrides]]
+module = "sqlite_vec"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

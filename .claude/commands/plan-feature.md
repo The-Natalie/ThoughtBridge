@@ -18,6 +18,17 @@ Transform a feature request into a **comprehensive implementation plan** through
 
 ### Phase 1: Feature Understanding
 
+**Resolve the requested deliverable:**
+
+1. Read .agents/plans/prime-summary.md to identify the current project state and active phase.
+2. Read .agents/plans/phase-{N}-build-list.md and locate the confirmed build list for the active phase.
+3. Match $ARGUMENTS to a deliverable in that list, using its title.
+4. Use the deliverable’s description to establish its scope and position in the phase.
+5. Consult the relevant sections of PRD.md as the authoritative source for requirements and acceptance criteria.
+6. Plan ONLY the requested deliverable. Do not include implementation work assigned to later deliverables or phases.
+7. If the deliverable cannot be identified, or the confirmed build list conflicts with the PRD, ask for clarification before proceeding.
+8. Do not modify or overwrite prime-summary.md or the phase build-list file.
+
 **Deep Feature Analysis:**
 
 - Extract the core problem being solved

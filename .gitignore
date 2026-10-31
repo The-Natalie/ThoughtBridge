@@ -16,6 +16,7 @@
 # test / coverage output
 /coverage
 e2e-screenshots/
+.playwright-mcp/
 
 # --- Node / JavaScript (delete this block if not applicable) ---
 
@@ -52,3 +53,12 @@ __pycache__/
 
 # Muse conversation logs (local, private)
 /conversation-log/
+
+# --- ThoughtBridge product (scaffold deliverable 1) ---
+
+# SQLite databases (dev/demo; rebuildable, never commit)
+/data/
+*.db
+
+# Frontend build output (root /dist does not cover this path)
+frontend/dist/
