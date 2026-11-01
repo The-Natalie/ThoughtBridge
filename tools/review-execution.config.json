@@ -1,0 +1,8 @@
+{
+  "description": "Reviewer-model configuration for tools/review-execution.py. No secrets in this file: the API key is read from the environment variable named in api_key_env (or a KEY=VALUE entry in ./.env). api_url must be an OpenAI-compatible chat-completions endpoint. max_output_tokens must leave headroom for reasoning models (reasoning tokens count toward it).",
+  "api_url": "https://api.meta.ai/v1/chat/completions",
+  "model": "muse-wonder-1.0",
+  "api_key_env": "MODEL_API_KEY",
+  "max_output_tokens": 32000,
+  "temperature": 0
+}
