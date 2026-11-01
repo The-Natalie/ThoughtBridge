@@ -17,7 +17,7 @@ You have just finished implementing a feature. Before moving on, reflect on:
 
 ## Generate Report
 
-Save to: `.agents/execution-reports/[feature-name].md`
+Save to: `.agents/execution-reports/<deliverable-name>-execution-report.md` (no timestamps; one report per deliverable — never overwrite an existing file)
 
 ### Meta Information
 

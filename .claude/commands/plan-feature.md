@@ -333,6 +333,8 @@ Design unit tests with fixtures and assertions following existing testing approa
 
 Execute every command to ensure zero regressions and 100% feature correctness.
 
+Every command or block MUST state its exact pass signal on an `Expected:` line (exit code plus the key output, count, or observation that proves success — e.g. `Expected: exit 0, "11 passed"`, `Expected: exit 0, docs:200`). A check whose passing output is not specified cannot confirm anything; do not write checks you cannot describe passing.
+
 ### Level 1: Syntax & Style
 
 <Project-specific linting and formatting commands>
@@ -347,7 +349,7 @@ Execute every command to ensure zero regressions and 100% feature correctness.
 
 ### Level 4: Manual Validation
 
-<Feature-specific manual testing steps - API calls, UI testing, exploratory checks, etc.>
+Feature-specific manual testing steps - API calls, UI testing, exploratory checks, etc. For EACH step, state Performer: `agent` (executable in this environment — the executor MUST run it) or `human` (requires a real browser, device, account, physical check, or judgment the agent lacks), then numbered steps and the exact expected observation per step. Every `human` step MUST be actionable by the user as written, with no missing setup, URLs, or credentials left unspecified.
 
 ### Level 5: Additional Validation (Optional)
 
@@ -357,9 +359,11 @@ Execute every command to ensure zero regressions and 100% feature correctness.
 
 ## MANUAL VERIFICATION CHECKLIST
 
-- [ ] Verify the feature works in the intended user flow
-- [ ] Verify edge cases and failure states
-- [ ] Confirm documentation or config changes are reflected where needed
+Label each item `agent` or `human` (same performer rule as Level 4). Each item MUST give numbered steps and the exact expected observable result — never a bare "verify X works."
+
+- [ ] [agent/human] <check>: <numbered steps>; expected: <exact observable result>
+- [ ] [agent/human] <edge cases and failure states>: <numbered steps>; expected: <exact observable result>
+- [ ] [agent/human] <docs/config reflection>: <numbered steps>; expected: <exact observable result>
 
 ## ROLLBACK CONSIDERATIONS
 
@@ -368,7 +372,9 @@ Execute every command to ensure zero regressions and 100% feature correctness.
 
 ## ACCEPTANCE CRITERIA
 
-<List specific, measurable criteria that must be met for completion>
+Each criterion MUST name the check that proves it: the validation level/command, the test file, or the manual-checklist item — plus the exact expected result. A criterion with no verification named is an incomplete plan.
+
+Example: `- [ ] Frontend renders 5 labeled placeholder views (L4 agent browser check: load dev URL, click each of the 5 tabs; expected: each labeled view visible with placeholder text)`
 
 - [ ] Feature implements all specified functionality
 - [ ] All validation commands pass with zero errors

@@ -7,7 +7,7 @@ argument-hint: [path-to-plan]
 
 Create the execution report file before starting any tasks.
 
-Write the full verbatim output of the entire execution to `.agents/execution-reports/<timestamp>-<plan-name>.md` as you go — every command run, every line of test output, every validation result exactly as printed, every deviation or issue encountered.
+Write the full verbatim output of the entire execution to `.agents/execution-reports/<deliverable-name>-execution-report.md` as you go — every command run, every line of test output, every validation result exactly as printed, every deviation or issue encountered. The deliverable name is the plan file's stem (no timestamps; one report per deliverable). If that file already exists, stop and ask the user before proceeding — never overwrite an existing report.
 
 Do not summarize. Do not shorten. Do not omit anything.
 
