@@ -5,6 +5,7 @@ a real AsyncClient.
 """
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -15,7 +16,10 @@ from app.core.config import Settings, get_settings
 from app.core.meta_client import (
     DEFAULT_META_MODEL,
     MAX_ERROR_CHARS,
+    QA_MAX_TOKENS,
+    MetaAPIError,
     ProbeResult,
+    chat_completion,
     check_meta_reachability,
 )
 
@@ -143,3 +147,104 @@ def test_probe_base_url_trailing_slash_tolerated() -> None:
     result = _probe(handler, base_url="https://x.test/v1/")
     assert result.ok is True
     assert result.error is None
+
+
+CHAT_MESSAGES = [{"role": "user", "content": "q"}]
+
+
+def _chat(handler: Callable[[httpx.Request], httpx.Response], **kwargs: Any) -> str:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    params: dict[str, Any] = {"api_key": CANARY, "messages": CHAT_MESSAGES, "client": client}
+    params.update(kwargs)
+    return asyncio.run(chat_completion(**params))
+
+
+def test_chat_200_returns_content_and_sends_contract() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        assert request.headers["Authorization"] == f"Bearer {CANARY}"
+        sent = json.loads(request.content.decode())
+        assert sent["model"] == MODEL
+        assert sent["messages"] == CHAT_MESSAGES
+        assert sent["response_format"] == {"type": "json_object"}
+        assert sent["max_tokens"] == QA_MAX_TOKENS
+        return httpx.Response(200, json={"choices": [{"message": {"content": "out"}}]})
+
+    assert _chat(handler) == "out"
+
+
+def test_chat_401_raises_with_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="unauthorized nope")
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code == 401
+    assert "401" in str(exc_info.value)
+    assert CANARY not in str(exc_info.value)
+
+
+def test_chat_500_body_truncated() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="x" * 1000)
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code == 500
+    assert CANARY not in str(exc_info.value)
+    assert len(exc_info.value.detail) <= len("HTTP 500: ") + MAX_ERROR_CHARS
+
+
+def test_chat_timeout_has_no_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("boom")
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code is None
+    assert "timed" in str(exc_info.value).lower()
+
+
+def test_chat_connection_error_has_no_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code is None
+    assert CANARY not in str(exc_info.value)
+
+
+def test_chat_200_bad_json_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not-json{{{", headers={"content-type": "text/plain"})
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code == 200
+
+
+def test_chat_200_empty_choices_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": []})
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code == 200
+
+
+def test_chat_200_empty_content_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
+
+    with pytest.raises(MetaAPIError) as exc_info:
+        _chat(handler)
+    assert exc_info.value.status_code == 200
+
+
+def test_chat_base_url_trailing_slash_tolerated() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    assert _chat(handler, base_url="https://x.test/v1/") == "ok"

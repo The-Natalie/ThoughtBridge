@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.health import liveness_router as health_liveness_router
 from app.api.health import router as health_router
 from app.api.ingest import router as ingest_router
+from app.api.query import router as query_router
 from app.api.retrieval import router as retrieval_router
 from app.core.config import get_settings
 from app.db.connection import check_embedding_dim, init_db
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(ingest_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
+    app.include_router(query_router, prefix="/api/v1")
     app.include_router(health_liveness_router)
     return app
 

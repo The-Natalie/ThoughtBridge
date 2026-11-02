@@ -1,6 +1,9 @@
 import { useState } from 'react'
 
+import ChatView from './views/ChatView'
+
 const VIEWS = [
+  { id: 'chat', label: 'Chat', blurb: '' },
   { id: 'capture', label: 'Capture', blurb: 'Capture view — coming in Phase 1.3 (notes, pastes, uploads).' },
   { id: 'learn', label: 'Learn', blurb: 'Learn view — coming in Phase 2 (interactive eight-step explainer).' },
   { id: 'work', label: 'Work', blurb: 'Work view — coming in Phase 2 (extraction, accomplishments).' },
@@ -11,7 +14,7 @@ const VIEWS = [
 type ViewId = (typeof VIEWS)[number]['id']
 
 function App() {
-  const [view, setView] = useState<ViewId>('capture')
+  const [view, setView] = useState<ViewId>('chat')
   const active = VIEWS.find((v) => v.id === view) ?? VIEWS[0]
 
   return (
@@ -34,9 +37,7 @@ function App() {
           ))}
         </nav>
       </header>
-      <main className="mt-6">
-        <p>{active.blurb}</p>
-      </main>
+      <main className="mt-6">{view === 'chat' ? <ChatView /> : <p>{active.blurb}</p>}</main>
     </div>
   )
 }
