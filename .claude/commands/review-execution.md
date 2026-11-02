@@ -121,7 +121,7 @@ python3 tools/review-execution.py --plan <plan-path> --report <execution-report-
    review file as its leading `## Stage Summary` section, immediately below
    the `Overall:` first line (which stays first, so placement verification
    still reads it back), with the file-editing tool, then print ONLY that
-   same summary (including its decision handoff when needed) plus the execution report and review paths. Details stay in
+   same summary plus the execution report and review paths. Details stay in
    the files. The summary is inserted once, after the loop's final review
    is placed: any later rerun replaces the review file (dropping the old
    summary) and a fresh summary is inserted when that run stops.
@@ -224,7 +224,7 @@ demonstrated failure, else NOT VERIFIED on any evidence gap, else PASS.
 `Blocked` is never a review status: it is the loop status when the
 environment prevents progress.
 
-## Stage Summary (saved to the review file and printed — keep the summary to 5–10 lines; decision prompt follows only when needed)
+## Stage Summary (saved to the review file and printed — keep it to 5–10 lines)
 
 At loop end, insert this block into the canonical review file as its
 leading section immediately below the `Overall:` line, then print the
@@ -234,54 +234,11 @@ identical block in the terminal:
 ## Stage Summary
 
 **Status:** <Approved | Needs Decision | Blocked | Correction Limit Reached>
-**Muse corrected:** <what was fixed across cycles, 1–2 lines; "None" if none>
-**Still open:** <routine fixes / owner decisions, one short line each; "None" if none>
-**You:** <the single concrete owner action, or "No action needed yet">
-**Muse next:** <what Muse does after your decision, or why Muse has stopped>
+**Corrections:** <what was fixed across cycles, 1–2 lines; "None" if none>
+**Remaining issues:** <only unresolved items, 1 line each; "None" if none>
+**My next action:** <the single concrete owner action>
 Files: <execution report path> | <review path>
 ```
-
-## Plain-English reports and decision handoffs
-
-Claude is the independent reviewer by default; Muse builds/executes; the
-user decides owner questions. If another reviewer is configured, name that
-reviewer accurately. Never use "My next action" or imply Claude edits files.
-
-For each finding, briefly state **Current** (what the plan or evidence says),
-**Proposed** (the reviewer's recommendation), and **Why** (the consequence).
-Use ordinary language and only quote the relevant snippet. Label it
-**Routine fix** or **Owner decision** using the existing triage rules.
-Routine fixes need no individual owner approval within the authorized loop.
-If a decision stops the loop, say which routine fixes remain queued.
-
-At loop end, summarize only corrections and unresolved issues; keep detailed
-findings in the report. For a decision, identify the reviewer's recommendation
-and whether the issue blocks progress. Give these paths briefly:
-
-- **Approve:** confirm or edit the recommended choices, then give Muse the prompt below.
-- **Reject:** tell Muse which recommendation you reject and what to retain;
-  Muse records the choice and keeps unresolved blocking issues stopped.
-- **Discuss:** ask about the named issue; Muse waits for that decision.
-
-Include one ready-to-copy Muse prompt after the summary, in both the saved
-summary section and the printed output. It must name the exact input and
-review paths, list recommended choices as `[owner approval required]`, and
-include all queued routine corrections with short success criteria. Tell
-the user to confirm or edit the choice lines before copying. Muse applies
-only explicitly approved choices, records rejections and unresolved
-questions, and follows the existing file permissions, evidence requirements,
-review procedure, and correction limit. Include needed owner-only check
-results without inventing them. Do not request unavailable actions from Claude.
-Do not duplicate the full finding explanations in the prompt.
-
-Approval never resets the cycle count or authorizes extra cycles. If the
-limit is reached, say Muse has stopped at the existing limit; do not offer
-another correction run as though it were already authorized. Rejection is
-not evidence that a blocking issue is resolved. Never offer automatic
-`/execute` for unresolved blocking issues or automatic `/commit`.
-When no owner decision is needed, omit decision options and the owner
-handoff. Approved plans still require owner approval before `/execute`;
-approved execution still requires the existing owner manual verification.
 
 ## Constraints
 

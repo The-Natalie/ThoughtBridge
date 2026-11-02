@@ -64,24 +64,15 @@ CHECKS
 - Keep names short ("Goal alignment", "Scope discipline", "Validation quality"). Put the key detail in note, one sentence.
 
 NEEDS_ATTENTION
-- Include ONLY concrete, actionable plan deficiencies the builder can fix without human judgment: missing tasks, inadequate validations, contradictions, unnecessary scope. Each finding concisely explains the current proposal, proposed correction, and why it matters. Use an empty array when there is nothing.
+- Include ONLY concrete, actionable plan deficiencies the builder can fix without human judgment: missing tasks, inadequate validations, contradictions, unnecessary scope. Each finding is one concise actionable sentence. Use an empty array when there is nothing.
 - Report ALL findings in one pass: keep examining the remaining evidence after the first few; never stop early or list only examples.
 
 ESCALATIONS
-- Include every finding that must stop the correction loop for a human decision: ambiguous or conflicting requirements; ambiguous prerequisite classifications; any correction that would affect feature scope, architecture, functionality, UX, or meaningful cost; any product or behavioral tradeoff whose readings lead to materially different outcomes; and any plan question only the owner can answer. A reasonable resolution of a minor ambiguity is accepted, not escalated. Batch every escalation into the first pass. Each issue concisely explains the current proposal, recommended choice, and why the owner must decide. Use an empty array when there is nothing.
+- Include every finding that must stop the correction loop for a human decision: ambiguous or conflicting requirements; ambiguous prerequisite classifications; any correction that would affect feature scope, architecture, functionality, UX, or meaningful cost; any product or behavioral tradeoff whose readings lead to materially different outcomes; and any plan question only the owner can answer. A reasonable resolution of a minor ambiguity is accepted, not escalated. Batch every escalation into the first pass. Each issue is one concise sentence stating the decision needed. Use an empty array when there is nothing.
 - Never place a routine technical correction here, and never place a human decision in needs_attention.
 
-
-HUMAN-FACING LANGUAGE AND HANDOFF
-- Write concise plain English for a nontechnical owner. Muse is the builder/executor; the user makes owner decisions. Refer to yourself as the reviewer, never as Muse or the owner. The report identifies the configured reviewer (Claude by default); do not claim to be Claude when another provider is configured.
-- For each finding or owner decision, state Current: the specific existing behavior or proposal; Proposed: your correction or recommendation; Why: the practical consequence. Keep this to 1–3 short sentences in the existing finding/issue string; quote only the relevant snippet. Do not repeat the full explanation in check notes or the handoff.
-- Label findings as Routine fix or Owner decision within the existing strings, according to the existing escalation rules. For owner decisions, give a recommendation and state whether the unresolved issue blocks progress. Do not invent evidence, decisions, or approval.
-- The delegate prompt addresses Muse, not the user. Include all queued routine corrections. When an owner decision exists, also include each recommended choice marked [owner approval required]; tell the user to confirm or edit these choices before copying. Do not treat a recommendation as approval. If only owner decisions remain, still provide the handoff.
-- In a decision handoff, instruct Muse to apply only choices explicitly approved by the user, include queued routine corrections, record rejected choices and unresolved questions, and stop for unresolved blocking issues. Approval does not reset the correction count, authorize extra cycles, change scope permissions, or bypass review. Request a fresh review only within the existing loop rules. Never automatically proceed to /execute or /commit.
-- Keep one handoff prompt, with short numbered tasks and success criteria. No repeated findings, tutorials, or ambiguous "My next action" wording.
-
 DELEGATE_PROMPT
-- A single complete ready-to-copy prompt (one string) covering ALL needs_attention corrections the builder must apply to the plan. Empty string only when neither routine corrections nor owner decisions remain.
+- A single complete ready-to-copy prompt (one string) covering ALL needs_attention corrections the builder must apply to the plan. Empty string when nothing is actionable.
 - The prompt must: identify the plan and give the exact plan and review file paths stated in this task; list each correction with what constitutes success; authorize editing ONLY the plan file; require appending a "### Cycle N" entry under a "## Revision History" section at the end of the plan (creating the section when absent) quoting which findings were addressed, what changed, and anything not done with its reason — while preserving all prior revision entries; prohibit code changes, other files, and commits; prohibit proceeding to implementation; require reporting limitations instead of inventing coverage; and forbid silently redefining requirements — conflicting or ambiguous requirements must be escalated, never resolved by fiat.
 - Format the prompt for readability: a short intro (plan, paths, authorization, standing rules), then numbered corrections each with its procedure and success criterion, then a clear closing (how to record the revision entry preserving prior entries, report limitations). Separate the parts with blank lines. Never emit a single dense paragraph.
 - Inside the prompt, use inline code or ``` fenced blocks for file paths and headings (never ```` fences: the prompt itself is wrapped in one).
@@ -93,7 +84,7 @@ CONVERGENCE
 
 RULES
 - Output ONLY the JSON object.
-- Reason carefully but keep every string short: names under ~60 characters, notes one sentence; findings at most three short sentences.
+- Reason carefully but keep every string short: names under ~60 characters, notes and findings one sentence.
 - Evaluate ONLY the received evidence. Never assume later work. The reviewer never approves its own changes: judge the plan as written, not as it might become."""
 
 
@@ -647,10 +638,7 @@ EMOJI = {"APPROVED": "✅", "NEEDS_REVISION": "🔁", "NEEDS_DECISION": "🧭",
 
 def render_review(overall, structure, checks, needs_attention, escalations,
                   delegate_prompt, provenance):
-    lines = [f"Overall: {EMOJI[overall]} {overall}", "",
-             "Muse builds and executes; you decide owner questions. "
-             "The configured reviewer (Claude by default) reviews the evidence; "
-             "its identity is recorded below.", ""]
+    lines = [f"Overall: {EMOJI[overall]} {overall}", ""]
     if structure:
         lines.append("### Structure")
         lines.append("")
@@ -684,9 +672,7 @@ def render_review(overall, structure, checks, needs_attention, escalations,
     if delegate_prompt:
         lines.append("### Give to Builder")
         lines.append("")
-        lines.append("Confirm or edit the owner choices before copying this prompt to Muse."
-                     if escalations or overall == "NEEDS_DECISION" else
-                     "Muse applies these routine corrections within the existing correction limit.")
+        lines.append("Copy the prompt below into the builder session as-is:")
         lines.append("")
         lines.append("````")
         lines.append(delegate_prompt.strip())
@@ -807,8 +793,7 @@ def main(argv=None):
         sampling = ("model-managed sampling" if provider == "anthropic"
                     else f"temperature {config['temperature']}")
         provenance = (
-            f"*Reviewer: {'Claude' if provider == 'anthropic' else 'configured independent reviewer'} "
-            f"(`{config['model']}`) via `{config['api_url']}` "
+            f"*Reviewer: `{config['model']}` via `{config['api_url']}` "
             f"(one fresh-context call, {sampling}); "
             f"plan `{args.plan}` ({len(plan_text)} chars); "
         )

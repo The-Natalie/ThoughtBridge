@@ -74,7 +74,7 @@ FILES
 - note: one short sentence max (e.g. "planned + reported", "planned but unmentioned in report").
 
 NEEDS_ATTENTION
-- Include ONLY required validations that are NOT_VERIFIED or FAIL, plus genuine contradictions between recorded evidence and completion claims. Each finding concisely explains current evidence, the proposed follow-up, and why it matters. Use an empty array when there is nothing.
+- Include ONLY required validations that are NOT_VERIFIED or FAIL, plus genuine contradictions between recorded evidence and completion claims. Each finding is one concise actionable sentence. Use an empty array when there is nothing.
 - Report ALL findings in one pass: keep examining the remaining evidence after the first few; never stop early or list only examples.
 
 CONVERGENCE
@@ -88,17 +88,8 @@ EVIDENCE RIGOR
 - For root .env preservation, use trustworthy baseline evidence (a hash, diff, or status recorded before execution) when the report contains it. Otherwise distinguish "current configuration confirmed, no secrets exposed" from "proven never modified" — claim only what the evidence supports and say what the stronger claim would need. Never print, log, or expose secret values.
 - If a requirement cannot be conclusively verified, status NOT_VERIFIED with the limitation stated — never PASS.
 
-
-HUMAN-FACING LANGUAGE AND HANDOFF
-- Write concise plain English for a nontechnical owner. Muse is the builder/executor; the user makes owner decisions. Refer to yourself as the reviewer, never as Muse or the owner. The report identifies the configured reviewer (Claude by default); do not claim to be Claude when another provider is configured.
-- For each finding or owner decision, state Current: the specific existing behavior or proposal; Proposed: your correction or recommendation; Why: the practical consequence. Keep this to 1–3 short sentences in the existing finding/issue string; quote only the relevant snippet. Do not repeat the full explanation in check notes or the handoff.
-- Label findings as Routine fix or Owner decision within the existing strings, according to the existing escalation rules. For owner decisions, give a recommendation and state whether the unresolved issue blocks progress. Do not invent evidence, decisions, or approval.
-- The delegate prompt addresses Muse, not the user. Include all queued routine corrections. When an owner decision exists, also include each recommended choice marked [owner approval required]; tell the user to confirm or edit these choices before copying. Do not treat a recommendation as approval. If only owner decisions remain, still provide the handoff.
-- In a decision handoff, instruct Muse to apply only choices explicitly approved by the user, include queued routine corrections, record rejected choices and unresolved questions, and stop for unresolved blocking issues. Approval does not reset the correction count, authorize extra cycles, change scope permissions, or bypass review. Request a fresh review only within the existing loop rules. Never automatically proceed to /execute or /commit.
-- Keep one handoff prompt, with short numbered tasks and success criteria. No repeated findings, tutorials, or ambiguous "My next action" wording.
-
 DELEGATE_PROMPT
-- A single complete ready-to-copy prompt (one string) covering ALL outstanding checks Muse can reasonably perform: missing tests, database behavior, file/convention inspection, documentation commands, configuration and secret hygiene, and browser checks where automation may be available. Empty string only when neither delegable work nor owner decisions remain; owner-only manual checks retain their executable steps below.
+- A single complete ready-to-copy prompt (one string) covering ALL outstanding checks Muse can reasonably perform: missing tests, database behavior, file/convention inspection, documentation commands, configuration and secret hygiene, and browser checks where automation may be available. Empty string when nothing is delegable.
 - The prompt must: identify the deliverable and give the exact plan, execution report, and review file paths stated in this task; list each outstanding check with what constitutes success; authorize running tests, inspecting files, starting and stopping temporary servers, and using available browser automation; require recording actual commands, results, and supporting evidence; require appending the results under a new "## Follow-up Validation" section at the end of the existing execution report while preserving its original contents; prohibit application-code fixes, unrelated changes, and commits; require reporting failures and unavailable capabilities instead of inventing success; and forbid rerunning validations already marked PASS except to investigate a genuine contradiction.
 - If a check is only partially automatable, include the automatable part here and instruct Muse to report the limitation plus the specific human fallback needed. For browser-automation checks in particular, spell out the exact human fallback steps Muse must report if automation is unavailable or insufficient to establish the result.
 - Format the prompt for readability: a short intro (deliverable, paths, authorization, standing rules), then numbered validation tasks each with its procedure and success criterion, then a clear closing (how to record evidence, append under ## Follow-up Validation preserving the original, report failures and limitations). Separate the parts with blank lines. Never emit a single dense paragraph.
@@ -110,7 +101,7 @@ HUMAN_CHECKS
 
 RULES
 - Output ONLY the JSON object.
-- Reason carefully but keep every string short: names under ~60 characters, notes one sentence; findings at most three short sentences.
+- Reason carefully but keep every string short: names under ~60 characters, notes and findings one sentence.
 - Evaluate ONLY the received evidence. Never assume later work. Never claim you ran tests or inspected code."""
 
 
@@ -604,10 +595,7 @@ SECTION_TITLES = {"created": "Files Created", "modified": "Files Modified",
 
 def render_review(overall, validations, file_results, needs_attention, human,
                   delegate_prompt, provenance):
-    lines = [f"Overall: {EMOJI[overall]} {overall}", "",
-             "Muse builds and executes; you decide owner questions. "
-             "The configured reviewer (Claude by default) reviews the evidence; "
-             "its identity is recorded below.", ""]
+    lines = [f"Overall: {EMOJI[overall]} {overall}", ""]
     if validations:
         lines.append("### Validations")
         lines.append("")
@@ -638,8 +626,7 @@ def render_review(overall, validations, file_results, needs_attention, human,
     if delegate_prompt:
         lines.append("### Give to Muse")
         lines.append("")
-        lines.append("Confirm any owner choices before copying this prompt to Muse. "
-                     "Routine follow-up stays within the existing correction limit.")
+        lines.append("Copy the prompt below into a new Muse session as-is:")
         lines.append("")
         lines.append("````")
         lines.append(delegate_prompt.strip())
@@ -762,8 +749,7 @@ def main(argv=None):
         sampling = ("model-managed sampling" if provider == "anthropic"
                     else f"temperature {config['temperature']}")
         provenance = (
-            f"*Reviewer: {'Claude' if provider == 'anthropic' else 'configured independent reviewer'} "
-            f"(`{config['model']}`) via `{config['api_url']}` "
+            f"*Reviewer: `{config['model']}` via `{config['api_url']}` "
             f"(one fresh-context call, {sampling}); "
             f"plan `{args.plan}` ({len(plan_text)} chars); report `{args.report}` "
             f"({len(report_text)} chars); generated "

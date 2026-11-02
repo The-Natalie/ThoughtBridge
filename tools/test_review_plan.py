@@ -487,24 +487,6 @@ class ProviderTests(unittest.TestCase):
                                  "usage": {}})
 
 
-class HumanHandoffTests(unittest.TestCase):
-    def test_decision_handoff_requires_choice_confirmation(self):
-        text = re.render_review(
-            "NEEDS_DECISION", [], [],
-            [{"finding": "Routine fix: Current: vague limit. Proposed: exact bound. Why: catches overflow."}],
-            [{"issue": "Owner decision: choose the intended behavior."}],
-            "Muse: [owner approval required] choose A; also fix the exact bound.", "*prov*")
-        self.assertIn("Confirm or edit the owner choices", text)
-        self.assertNotIn("as-is", text)
-        self.assertIn("also fix the exact bound", text)
-        self.assertIn("Muse builds and executes; you decide", text)
-
-    def test_routine_handoff_does_not_request_owner_approval(self):
-        text = re.render_review("NEEDS_REVISION", [], [], [], [], "Muse: fix bound.", "*prov*")
-        self.assertIn("Muse applies these routine corrections", text)
-        self.assertNotIn("Confirm or edit", text)
-
-
 HISTORY = """# Feature: X
 
 ## NOTES

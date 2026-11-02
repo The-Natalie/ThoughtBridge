@@ -446,18 +446,6 @@ class ProviderTests(unittest.TestCase):
                                  "usage": {}})
 
 
-class HumanHandoffTests(unittest.TestCase):
-    def test_execution_handoff_does_not_imply_blanket_approval(self):
-        text = re.render_review(
-            "NOT_VERIFIED", [], [],
-            [{"finding": "Owner decision: Current: missing access. Proposed: owner verifies. Why: evidence needed."}],
-            [], "Muse: record owner decision and queued checks.", "*prov*")
-        self.assertIn("Confirm any owner choices", text)
-        self.assertNotIn("as-is", text)
-        self.assertIn("existing correction limit", text)
-        self.assertIn("Muse builds and executes; you decide", text)
-
-
 FOLLOW_UPS = """# Report
 
 ## Follow-up Validation (cycle 1)
