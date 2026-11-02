@@ -434,3 +434,84 @@ Hygiene checks:
 - fastembed note: import prints a harmless onnxruntime telemetry warning on stderr; model download (~67MB ONNX) happens on first `TextEmbedding()` instantiation (deliverable 3), not before.
 - Did NOT commit (per skill: no auto-commit). Untracked for review: `backend/`, `frontend/`, `.agents/plans/`, `.agents/execution-reports/`; modified: `.gitignore`, `AGENTS.md` (+ pre-existing user edits to `.claude/commands/prime.md`, `plan-feature.md`).
 
+---
+
+## Follow-up Validation
+
+Performed 2026-11-01 (~04:00–04:15 UTC) per `.agents/execution-reports/reviews/scaffold-backend-frontend-database-schema-execution-report-review.md` (7 NOT_VERIFIED items). Validation only: no application code changed, no commit. Pre-existing PASS items were not rerun except where the numbered task itself required it.
+
+### Task 1 — Complete listed-file layout inventory: PASS
+
+Command (exit 0): existence probe over every path in the plan's "New Files to Create" list plus `.gitignore` / `AGENTS.md`. Result: **all 28 present, none missing**:
+
+- Backend: `backend/pyproject.toml`, `backend/.python-version`, `backend/uv.lock`, `backend/README.md`, `backend/app/__init__.py`, `backend/app/main.py`, `backend/app/core/__init__.py`, `backend/app/core/config.py`, `backend/app/db/__init__.py`, `backend/app/db/schema.sql`, `backend/app/db/connection.py`, `backend/app/api/__init__.py`, `backend/app/ingest/__init__.py`, `backend/app/retrieval/__init__.py`, `backend/app/llm/__init__.py`, `backend/tests/test_app_boot.py`, `backend/tests/test_config.py`, `backend/tests/test_db_init.py`
+- Frontend: `frontend/package-lock.json`, `frontend/vite.config.ts`, `frontend/src/index.css`, `frontend/src/App.tsx`, `frontend/src/api/client.ts`, `frontend/src/api/client.test.ts`, `frontend/.env.example`, `frontend/package.json`
+- Root: `.gitignore`, `AGENTS.md`
+
+`backend/README.md` exists with `## Setup` (`uv sync`), `## Run` (`uv run uvicorn app.main:create_app --factory --reload`), and `## Test / lint` (`uv run pytest`, `uv run ruff check . && uv run ruff format --check .`, `uv run mypy app`) — setup, run, test, and lint sections all present.
+
+Extra scaffold-relevant files (all expected, none missing): Vite-template files (`frontend/index.html`, `frontend/src/main.tsx`, `frontend/tsconfig*.json`, `frontend/public/*`, `frontend/README.md`, `frontend/.gitignore`, `frontend/.oxlintrc.json`) and generated/ignored outputs (`backend/.venv/`, `backend/.mypy_cache/`, `backend/.pytest_cache/`, `backend/.ruff_cache/`, `__pycache__/`, `frontend/node_modules/`, `frontend/dist/`).
+
+### Task 2 — DB idempotency, meta seeds, FK indexes: PASS
+
+Verbatim command `(cd backend && uv run python -c "from app.db.connection import init_db; p='/tmp/tb_followup_idempotent.db'; init_db(p); init_db(p); print('idempotent ok')")` first failed with exit 2 (`Failed to initialize cache at /Users/natalie/.cache/uv ... Operation not permitted`) — the same sandbox-only cache restriction as report Deviation 1. Reran with the env-only prefix `UV_CACHE_DIR=/tmp/uv-cache` (command itself unchanged): exit 0, output `idempotent ok` — second `init_db` on the same file succeeds.
+
+Meta seeds via project Python (`app.db.connection.connect`, no system sqlite3 CLI): `schema_version=1`, `embedding_dim=384`, `embedding_model=BAAI/bge-small-en-v1.5`.
+
+FK/index objects (`sqlite_master type='index'`): `idx_chunks_artifact ON chunks`, `idx_explanations_concept ON explanations`, `idx_fact_chunks_chunk ON fact_chunks`, `idx_interpretations_artifact ON interpretations`, `idx_markers_explanation ON explanation_markers`, `idx_turns_conversation ON turns`, plus `sqlite_autoindex_*` PK indexes. Cleanup: `/tmp/tb_followup_idempotent.db*` removed, verified absent (`ls: No such file or directory`).
+
+### Task 3 — AGENTS.md and backend README command accuracy: PASS with two noted items
+
+Textual comparison: `backend/README.md` lines match the AGENTS.md Commands block exactly (`uv sync`; `uv run uvicorn app.main:create_app --factory --reload`; `uv run pytest`; `uv run ruff check . && uv run ruff format --check .`; `uv run mypy app`; frontend `npm run dev`, `npm run build`, `npm test -- --run`). AGENTS.md matches the plan Level 1–3 commands and the report's green ladder except item (1) below.
+
+Verbatim runs (clean shells, from the documented directory; only env-prefix additions `UV_CACHE_DIR=/tmp/uv-cache` / `npm_config_cache=/tmp/npm-cache` for the sandbox unwritable-cache restrictions from report Deviations 1/3):
+
+| Command | Result |
+|---|---|
+| `uv sync` (from `backend/`) | exit 0 (`Audited 84 packages`) |
+| `uv run pytest` (from `backend/`) | exit 0 (`11 passed in 0.46s`) |
+| `uv run ruff check . && uv run ruff format --check .` (from `backend/`) | exit 0 (`All checks passed!`, `14 files already formatted`) |
+| `uv run mypy app` (from `backend/`) | exit 0 (`no issues found in 10 source files`) |
+| `uv run uvicorn app.main:create_app --factory --reload` (from `backend/`) | exit 3 — see item (2) |
+| `npm test -- --run` (from `frontend/`) | exit 0 (`3 passed (3)`) |
+| `npm run build` (from `frontend/`) | exit 0 (`✓ built in 201ms`, same asset hashes `index-DPJH32ON.css` / `index-CdZh8Fzi.js` as the report) |
+| `npm run dev -- --port 5173` (from `frontend/`) | bind-blocked — see Task 4 |
+
+(1) Cosmetic mismatch: AGENTS.md records `uv run pytest` while the plan Level 2 command is `uv run pytest -q` (verbosity flag only; same 11-test suite, same green result). (2) Environmental limitation, not a code failure: the verbatim uvicorn command fails in-sandbox at socket bind (`ERROR: [Errno 1] Operation not permitted`, exit 3) — same blanket bind restriction as report Deviation 4; one-time unsandboxed escalation was requested and denied (`unsandboxed execution requires human approval, but approval prompts are disabled`). Long-running server commands cannot "exit 0" literally; the boot check itself is what the sandbox blocks.
+
+### Task 4 — Frontend placeholder rendering in a real browser context: PASS via equivalent procedure (verbatim dev-server path blocked)
+
+Verbatim `cd frontend && npm run dev -- --port 5173` fails in-sandbox: `Error: listen EPERM: operation not permitted 127.0.0.1:5173`, exit 1. The sandbox blocks all listening sockets ("Do NOT retry, switch ports or hosts"), and unsandboxed escalation is unavailable (see Task 3). `agent-browser` CLI exists (0.41.0) but its daemon cannot start in-sandbox (`Socket directory ... not writable`; with `HOME=/tmp/tb_home`, `Daemon process exited during startup`); a direct headless Chromium launch via `playwright-core` also fails (`bootstrap_check_in ... Permission denied`). No dev server could be started, so there was no dev server to stop.
+
+Equivalent real-browser validation (Playwright MCP Chromium) against the actual production build: verified `frontend/dist` JS/CSS contain no external asset references, inlined the byte-identical bundle into a single page, loaded it in the browser, and clicked every tab. All five views render visibly-labeled placeholder content (accessibility-tree text plus screenshot), with zero console errors:
+
+- Capture: `Capture view — coming in Phase 1.3 (notes, pastes, uploads).`
+- Learn: `Learn view — coming in Phase 2 (interactive eight-step explainer).`
+- Work: `Work view — coming in Phase 2 (extraction, accomplishments).`
+- Practice: `Practice view — coming in Phase 3 (Learning-mode loop).`
+- Interview: `Interview view — coming in Phase 3 (Interview-mode loop).`
+
+Screenshot (Interview tab active): `.playwright-mcp/tb_tabs_followup.png` (kept as evidence). Probe scratch removed: `.playwright-mcp/tb_single_probe.html`, session snapshot `.yml` files, `/tmp/tb_dist_probe`, `/tmp/tb_single.html`, `/tmp/tb_pw`, `/tmp/tb_home`.
+
+Required human fallback for the verbatim dev-server check: run `cd frontend && npm run dev -- --port 5173`, open `http://localhost:5173/` in a browser, click Capture, Learn, Work, Practice, and Interview one by one, confirm each shows a visibly marked placeholder message, then stop the server with Ctrl+C.
+
+### Task 5 — Root .env state, secret hygiene, ignore rules: PASS
+
+No secret value was printed, logged, or copied at any point. Current state: root `.env` exists (`env_exists=true`); `META_MODEL` equals `muse-spark-1.3` exactly (1 exact-line match, `META_MODEL value: muse-spark-1.3`); `MODEL_API_KEY` present: True, non-empty: True (booleans only); 6 keys total. This matches the plan's stated values.
+
+Secret scan over new scaffold files (`backend/app`, `backend/tests`, `backend/pyproject.toml`, `backend/README.md`, `backend/.python-version`, `frontend/src`, `frontend/.env.example`, `frontend/package.json`, `frontend/vite.config.ts`, `frontend/index.html`) and edited root files (`.gitignore`, `AGENTS.md`): keyword hits are structural only — `backend/app/core/config.py:8,17` (`SecretStr` typing, no value), `backend/tests/test_config.py:1,12,40,41,43,44` (dummy env var `dummy-key-123`, asserted absent from `repr`), `AGENTS.md:136` (`Non-secret`). A containment check for the real key value across all scaffold/edited files returned NONE.
+
+Retroactive proof that the root `.env` was never modified is impossible without a pre-execution hash or diff baseline — none exists, so "untouched" remains an assertion about current state only. Current redacted baseline for future deliverables: `sha256:8e23203f2e4548b5f030e6cd8931dd1c4f45404d9875171c4d3d2a55ff0db06f` (hash of file bytes, exposes no secret).
+
+Ignore probes (`git check-ignore -v data/probe.db frontend/dist/index.html`, exit 0): `data/probe.db` matches root `.gitignore:60` (`/data/`); `frontend/dist/index.html` matches `frontend/.gitignore:11` (`dist`, from the Vite template — the root `.gitignore` `frontend/dist/` rule is also present as belt-and-braces). Both probes ignored as required.
+
+### Task 6 — Convention inspection: PASS
+
+- `grep -RInE '\bprint\(' backend/app` → no matches (exit 1): no `print(` in backend code.
+- `grep -RIn 'logging.getLogger' backend/app` → `backend/app/db/connection.py:11: logger = logging.getLogger(__name__)` (`import logging` at :5, `logger.info(...)` DB-init summary at :41): module logging present where the plan requires it.
+- `grep -RIn 'fetch(' frontend/src` → only `frontend/src/api/client.ts:18` and `:24`: no direct `fetch(` outside `frontend/src/api/client.ts`.
+
+### Cleanup confirmation
+
+Temporary database `/tmp/tb_followup_idempotent.db*` removed (verified). No dev/uvicorn server could bind in-sandbox, so no server processes were started or left running (Task 3/4 bind attempts exited immediately). Browser-probe scratch removed (see Task 4); only evidence screenshot `.playwright-mcp/tb_tabs_followup.png` retained. No application files modified; nothing committed.
+

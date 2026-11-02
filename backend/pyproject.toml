@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
     "fastapi[standard]>=0.136",
+    "httpx>=0.28",
     "pydantic>=2.6",
     "pydantic-settings>=2.9",
     "sqlite-vec>=0.1",
@@ -16,7 +17,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest",
-    "httpx",
     "ruff",
     "mypy",
 ]

@@ -23,6 +23,10 @@ deliverable name is the plan file's stem). Reruns automatically replace
 the existing review for that deliverable; the execution report is never
 modified.
 
+Loop budget (no API call): --loop-state --report <report.md> prints the
+follow-up total and this run's remaining corrections; pass --run-start N
+with the total observed at invocation start on later queries.
+
 Config (JSON): api_url (OpenAI-compatible chat-completions endpoint), model,
 api_key_env (env var naming the API key), max_output_tokens, temperature.
 The API key is read from that env var, falling back to a KEY=VALUE entry in
@@ -56,7 +60,7 @@ VALIDATIONS
 - A test passing does not automatically prove the requirement: ask whether the assertions actually establish it. Implementation alone is never verification.
 - Recognize equivalent procedures: if a check could not run as written but an alternative tested the SAME assertion and reportedly passed, status PASS with a note like "passed via equivalent procedure".
 - Consolidate redundant successful checks (e.g. per-task reruns superseded by the final suite) into one entry, but NEVER consolidate away a FAIL, NOT_VERIFIED, or skipped check.
-- Cover acceptance criteria: if important behavior was implemented but not adequately tested, add a validation entry (NOT_VERIFIED, or FAIL when evidence shows failure) so it cannot pass silently.
+- Cover acceptance criteria: if important behavior was implemented but not adequately tested, add a validation entry (NOT_VERIFIED, or FAIL when evidence shows failure) so it cannot pass silently. Add such entries only for gaps that could hide a genuine failure of the deliverable — never to polish an already convincing record.
 - Keep names short ("Unit tests: 68/68", "DB migration", "Frontend rendering"). Put the key expected-vs-recorded detail in note, one sentence.
 
 FILES
@@ -70,15 +74,31 @@ FILES
 - note: one short sentence max (e.g. "planned + reported", "planned but unmentioned in report").
 
 NEEDS_ATTENTION
-- Include ONLY required validations that are NOT_VERIFIED or FAIL, plus genuine contradictions between recorded evidence and completion claims. Each finding is one concise actionable sentence. Use an empty array when there is nothing.
+- Include ONLY required validations that are NOT_VERIFIED or FAIL, plus genuine contradictions between recorded evidence and completion claims. Each finding concisely explains current evidence, the proposed follow-up, and why it matters. Use an empty array when there is nothing.
+- Report ALL findings in one pass: keep examining the remaining evidence after the first few; never stop early or list only examples.
+
+CONVERGENCE
+- Find everything in ONE pass and batch every owner decision into the first review — never dribble out new findings or escalations pass after pass.
+- On re-review (the report carries ## Follow-up Validation sections from prior cycles): judge only (a) whether each prior finding is now evidenced, and (b) whether the corrections introduced a new problem. Do not open new fronts on long-standing content. Never re-raise an item the follow-ups resolved.
+- The plan's decisions are settled: verify the implementation against the plan's stated approach — do not second-guess approach choices, propose redesigns, or demand a different implementation of agreed behavior.
+- Calibrate to the owner's bar: if the recorded evidence shows the deliverable working as specified, approve it. Report a finding only if the owner would plausibly block the deliverable over it. When torn between flagging and passing, pass.
 
 EVIDENCE RIGOR
 - Procedures must actually establish what they claim: finding one expected value in a config file does not prove the whole file is unchanged; an ignored file's absence from git status does not prove it was preserved; a successful build does not prove UI rendering.
 - For root .env preservation, use trustworthy baseline evidence (a hash, diff, or status recorded before execution) when the report contains it. Otherwise distinguish "current configuration confirmed, no secrets exposed" from "proven never modified" — claim only what the evidence supports and say what the stronger claim would need. Never print, log, or expose secret values.
 - If a requirement cannot be conclusively verified, status NOT_VERIFIED with the limitation stated — never PASS.
 
+
+HUMAN-FACING LANGUAGE AND HANDOFF
+- Write concise plain English for a nontechnical owner. Muse is the builder/executor; the user makes owner decisions. Refer to yourself as the reviewer, never as Muse or the owner. The report identifies the configured reviewer (Claude by default); do not claim to be Claude when another provider is configured.
+- For each finding or owner decision, state Current: the specific existing behavior or proposal; Proposed: your correction or recommendation; Why: the practical consequence. Keep this to 1–3 short sentences in the existing finding/issue string; quote only the relevant snippet. Do not repeat the full explanation in check notes or the handoff.
+- Label findings as Routine fix or Owner decision within the existing strings, according to the existing escalation rules. For owner decisions, give a recommendation and state whether the unresolved issue blocks progress. Do not invent evidence, decisions, or approval.
+- The delegate prompt addresses Muse, not the user. Include all queued routine corrections. When an owner decision exists, also include each recommended choice marked [owner approval required]; tell the user to confirm or edit these choices before copying. Do not treat a recommendation as approval. If only owner decisions remain, still provide the handoff.
+- In a decision handoff, instruct Muse to apply only choices explicitly approved by the user, include queued routine corrections, record rejected choices and unresolved questions, and stop for unresolved blocking issues. Approval does not reset the correction count, authorize extra cycles, change scope permissions, or bypass review. Request a fresh review only within the existing loop rules. Never automatically proceed to /execute or /commit.
+- Keep one handoff prompt, with short numbered tasks and success criteria. No repeated findings, tutorials, or ambiguous "My next action" wording.
+
 DELEGATE_PROMPT
-- A single complete ready-to-copy prompt (one string) covering ALL outstanding checks Muse can reasonably perform: missing tests, database behavior, file/convention inspection, documentation commands, configuration and secret hygiene, and browser checks where automation may be available. Empty string when nothing is delegable.
+- A single complete ready-to-copy prompt (one string) covering ALL outstanding checks Muse can reasonably perform: missing tests, database behavior, file/convention inspection, documentation commands, configuration and secret hygiene, and browser checks where automation may be available. Empty string only when neither delegable work nor owner decisions remain; owner-only manual checks retain their executable steps below.
 - The prompt must: identify the deliverable and give the exact plan, execution report, and review file paths stated in this task; list each outstanding check with what constitutes success; authorize running tests, inspecting files, starting and stopping temporary servers, and using available browser automation; require recording actual commands, results, and supporting evidence; require appending the results under a new "## Follow-up Validation" section at the end of the existing execution report while preserving its original contents; prohibit application-code fixes, unrelated changes, and commits; require reporting failures and unavailable capabilities instead of inventing success; and forbid rerunning validations already marked PASS except to investigate a genuine contradiction.
 - If a check is only partially automatable, include the automatable part here and instruct Muse to report the limitation plus the specific human fallback needed. For browser-automation checks in particular, spell out the exact human fallback steps Muse must report if automation is unavailable or insufficient to establish the result.
 - Format the prompt for readability: a short intro (deliverable, paths, authorization, standing rules), then numbered validation tasks each with its procedure and success criterion, then a clear closing (how to record evidence, append under ## Follow-up Validation preserving the original, report failures and limitations). Separate the parts with blank lines. Never emit a single dense paragraph.
@@ -90,7 +110,7 @@ HUMAN_CHECKS
 
 RULES
 - Output ONLY the JSON object.
-- Reason carefully but keep every string short: names under ~60 characters, notes and findings one sentence.
+- Reason carefully but keep every string short: names under ~60 characters, notes one sentence; findings at most three short sentences.
 - Evaluate ONLY the received evidence. Never assume later work. Never claim you ran tests or inspected code."""
 
 
@@ -234,6 +254,76 @@ def post_chat_completion(api_url, api_key, model, max_tokens, temperature,
             "For reasoning models this usually means max_output_tokens is too small "
             "to hold reasoning plus the review — raise max_output_tokens in the "
             "config and retry. No review was written."
+        )
+    print(f"reviewer usage: {json.dumps(usage)}", file=sys.stderr)
+    return content.strip()
+
+
+def post_anthropic_messages(api_url, api_key, model, max_tokens, temperature,
+                            system_prompt, user_message):
+    """Same contract as post_chat_completion via Anthropic Messages API.
+
+    `temperature` is accepted for call compatibility but not sent: current
+    Claude models manage sampling themselves (Opus 5.5 rejects it).
+    """
+    payload = json.dumps({
+        "model": model,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_message}],
+        "max_tokens": max_tokens,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        api_url, data=payload,
+        headers={"x-api-key": api_key,
+                 "anthropic-version": "2023-06-01",
+                 "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request,
+                                    timeout=REQUEST_TIMEOUT_SECONDS
+                                    ) as response:
+            raw = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", "replace")[:1500]
+        except Exception:
+            body = ""
+        lowered = body.lower()
+        if e.code == 400 and any(
+                word in lowered for word in
+                ("context", "too long", "too large", "maximum", "token")):
+            raise ReviewError(
+                "reviewer API reports the inputs exceed the model's supported "
+                f"context (HTTP {e.code}). Refusing to truncate evidence — no "
+                f"review was written. Details: {body or e}"
+            )
+        raise ReviewError(
+            f"reviewer API request failed (HTTP {e.code}): {body or e}")
+    except urllib.error.URLError as e:
+        raise ReviewError(f"reviewer API request failed (network): {e}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ReviewError(f"reviewer API returned non-JSON response: {raw[:500]}")
+    try:
+        blocks = data["content"]
+        stop_reason = data.get("stop_reason")
+    except (KeyError, TypeError):
+        raise ReviewError(f"reviewer API returned unexpected shape: {raw[:500]}")
+    usage = data.get("usage", {})
+    if stop_reason == "max_tokens":
+        raise ReviewError(
+            "reviewer API stopped mid-review: output token budget exhausted "
+            f"(usage: {json.dumps(usage)}). The review would be truncated, so no "
+            "review was written — raise max_output_tokens in the config and retry."
+        )
+    content = "".join(b.get("text", "") for b in blocks
+                      if isinstance(b, dict) and b.get("type") == "text")
+    if not content.strip():
+        raise ReviewError(
+            "reviewer API returned empty content "
+            f"(stop_reason={stop_reason}, usage: {json.dumps(usage)}). "
+            "No review was written."
         )
     print(f"reviewer usage: {json.dumps(usage)}", file=sys.stderr)
     return content.strip()
@@ -443,6 +533,52 @@ def _verify_end(section, path, uncertain, change_evidenced, note, repo_root):
             "note": note or "intended change not confirmed by recorded evidence"}
 
 
+CORRECTION_BUDGET = 3
+
+FOLLOW_UP_PREFIX = "## Follow-up Validation (cycle "
+
+
+def parse_cycle_numbers(report_text):
+    """List cycle numbers from Follow-up Validation sections.
+
+    Numbered `## Follow-up Validation (cycle N)` sections contribute N; a
+    legacy unnumbered `## Follow-up Validation` section counts as cycle 1.
+    """
+    numbers = []
+    legacy = False
+    for line in report_text.splitlines():
+        stripped = line.strip()
+        if stripped == "## Follow-up Validation":
+            legacy = True
+        elif (stripped.startswith(FOLLOW_UP_PREFIX)
+                and stripped.endswith(")")):
+            try:
+                numbers.append(int(stripped[len(FOLLOW_UP_PREFIX):-1]))
+            except ValueError:
+                continue
+    if legacy and 1 not in numbers:
+        numbers.append(1)
+    return sorted(numbers)
+
+
+def loop_state(report_text, run_start=None):
+    """Per-invocation correction budget derived from follow-up sections.
+
+    run_start is the cycles_total observed at invocation start (None means
+    this query starts the run). Historical sections never consume the
+    current run's budget: only sections added since run_start count.
+    """
+    numbers = parse_cycle_numbers(report_text)
+    total = len(numbers)
+    if run_start is None:
+        run_start = total
+    used = max(0, total - run_start)
+    return {"cycles_total": total,
+            "corrections_used": used,
+            "corrections_remaining": max(0, CORRECTION_BUDGET - used),
+            "next_cycle_number": (max(numbers) + 1) if numbers else 1}
+
+
 def compute_overall(validations, file_results, needs_attention):
     """PASS only when everything is evidenced; FAIL on demonstrated failure."""
     if any(v["status"] == "FAIL" for v in validations):
@@ -468,7 +604,10 @@ SECTION_TITLES = {"created": "Files Created", "modified": "Files Modified",
 
 def render_review(overall, validations, file_results, needs_attention, human,
                   delegate_prompt, provenance):
-    lines = [f"Overall: {EMOJI[overall]} {overall}", ""]
+    lines = [f"Overall: {EMOJI[overall]} {overall}", "",
+             "Muse builds and executes; you decide owner questions. "
+             "The configured reviewer (Claude by default) reviews the evidence; "
+             "its identity is recorded below.", ""]
     if validations:
         lines.append("### Validations")
         lines.append("")
@@ -499,7 +638,8 @@ def render_review(overall, validations, file_results, needs_attention, human,
     if delegate_prompt:
         lines.append("### Give to Muse")
         lines.append("")
-        lines.append("Copy the prompt below into a new Muse session as-is:")
+        lines.append("Confirm any owner choices before copying this prompt to Muse. "
+                     "Routine follow-up stays within the existing correction limit.")
         lines.append("")
         lines.append("````")
         lines.append(delegate_prompt.strip())
@@ -559,11 +699,30 @@ def parse_args(argv):
                              "in the delegate prompt (default: the actual save "
                              "path); pass the canonical reviews-dir path when "
                              "staging to a temporary directory")
+    parser.add_argument("--loop-state", action="store_true",
+                        help="print this run's correction budget derived from "
+                             "the existing follow-up history, then exit (no "
+                             "API call)")
+    parser.add_argument("--run-start", type=int, default=None, metavar="N",
+                        help="cycles_total observed at invocation start "
+                             "(default: the current total, i.e. this query "
+                             "starts the run)")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv or sys.argv[1:])
+    if args.loop_state:
+        try:
+            text = read_input_file("execution report", args.report)
+        except ReviewError as e:
+            print(f"review-execution: error: {e}", file=sys.stderr)
+            return 1
+        state = loop_state(text, args.run_start)
+        for key in ("cycles_total", "corrections_used",
+                    "corrections_remaining", "next_cycle_number"):
+            print(f"{key}: {state[key]}")
+        return 0
     try:
         config = load_config(args.config)
         api_key = get_api_key(config["api_key_env"])
@@ -583,7 +742,16 @@ def main(argv=None):
               f"(plan {len(plan_text)} chars, "
               f"report {len(report_text)} chars)", file=sys.stderr)
         # The single independent reviewer call: fresh context, no history.
-        content = post_chat_completion(
+        provider = config.get("provider", "openai")
+        if provider == "anthropic":
+            post = post_anthropic_messages
+        elif provider == "openai":
+            post = post_chat_completion
+        else:
+            raise ReviewError(
+                "config provider must be 'anthropic' or 'openai', "
+                f"got: {provider!r}")
+        content = post(
             config["api_url"], api_key, config["model"],
             config["max_output_tokens"], config["temperature"],
             SYSTEM_PROMPT, user_message)
@@ -591,9 +759,12 @@ def main(argv=None):
         file_results = verify_files(review["files"], os.path.abspath("."))
         overall = compute_overall(review["validations"], file_results,
                                   review["needs_attention"])
+        sampling = ("model-managed sampling" if provider == "anthropic"
+                    else f"temperature {config['temperature']}")
         provenance = (
-            f"*Reviewer: `{config['model']}` via `{config['api_url']}` "
-            f"(one fresh-context call, temperature {config['temperature']}); "
+            f"*Reviewer: {'Claude' if provider == 'anthropic' else 'configured independent reviewer'} "
+            f"(`{config['model']}`) via `{config['api_url']}` "
+            f"(one fresh-context call, {sampling}); "
             f"plan `{args.plan}` ({len(plan_text)} chars); report `{args.report}` "
             f"({len(report_text)} chars); generated "
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}.*"

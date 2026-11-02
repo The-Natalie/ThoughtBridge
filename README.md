@@ -37,7 +37,7 @@ Technology Stack
 * Frontend: React, TypeScript, Vite, Tailwind CSS
 * Database: SQLite, FTS5, sqlite-vec
 * Retrieval: Hybrid keyword and semantic search (RAG)
-* AI: Meta Model API
+* AI: Meta Model API (Muse Spark — model muse-spark-1.3, recorded at Phase 1 CHECKPOINT 1)
 * Embeddings: fastembed
 
 Project Status

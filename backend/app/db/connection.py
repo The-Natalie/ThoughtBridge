@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import sqlite_vec
@@ -67,3 +68,38 @@ def check_embedding_dim(path: str | Path, expected_model: str, expected_dim: int
             f"DB has {meta.get('embedding_model')} dim={meta.get('embedding_dim')}, "
             f"expected {expected_model} dim={expected_dim}"
         )
+
+
+@dataclass
+class DbProbeResult:
+    ok: bool
+    error: str | None
+
+
+def check_readable(path: str | Path) -> DbProbeResult:
+    """Check DB readability with strictly no side effects (for health checks).
+
+    Opens read-only (`mode=ro` URI) and selects `schema_version` from `meta`.
+    Never calls `init_db`/`connect`, never creates files or parent dirs, never
+    sets WAL mode. MVP limitation: `str(path)` is embedded in the URI as-is,
+    so paths with URI-special characters (?, #, %) may misbehave.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except (FileNotFoundError, sqlite3.DatabaseError) as exc:
+        error = f"cannot open database: {exc}"
+        logger.warning("db probe failed: path=%s detail=%s", path, error)
+        return DbProbeResult(ok=False, error=error)
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    except sqlite3.DatabaseError as exc:
+        error = f"database unreadable: {exc}"
+        logger.warning("db probe failed: path=%s detail=%s", path, error)
+        return DbProbeResult(ok=False, error=error)
+    finally:
+        conn.close()
+    if row is None:
+        error = "schema_version missing from meta table"
+        logger.warning("db probe failed: path=%s detail=%s", path, error)
+        return DbProbeResult(ok=False, error=error)
+    return DbProbeResult(ok=True, error=None)

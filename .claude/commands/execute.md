@@ -13,7 +13,7 @@ Do not summarize. Do not shorten. Do not omit anything.
 
 In the terminal, only print:
 - the path to the report file
-- a one-line status that accurately reflects verification outcomes (e.g. "all checks passed, 0 failures, ready for /commit" — or "N verified, M partially verified/unverified/failed, see Follow-up Items" when anything is outstanding; never claim complete verification while items remain)
+- a one-line status that accurately reflects verification outcomes (e.g. "all checks passed, 0 failures, ready for /review-execution" — or "N verified, M partially verified/unverified/failed, see Follow-up Items" when anything is outstanding; never claim complete verification while items remain)
 
 ---
 

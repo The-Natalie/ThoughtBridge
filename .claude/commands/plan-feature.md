@@ -189,7 +189,7 @@ So that <benefit/value>
 **Feature Type**: [New Capability/Enhancement/Refactor/Bug Fix]
 **Estimated Complexity**: [Low/Medium/High]
 **Primary Systems Affected**: [List of main components/services]
-**Dependencies**: [External libraries or services required]
+**Dependencies**: [External libraries or services required; prerequisite deliverables outside this plan — name each, or "none"]
 **Assumptions**: [Key assumptions that should be validated before coding]
 
 ---
@@ -465,6 +465,7 @@ After creating the Plan, provide:
 - Complexity assessment
 - Key implementation risks or considerations
 - Estimated confidence score for one-pass success
+- Next step: run `/review-plan <plan path>` — it starts the automated plan correction loop (max 3 cycles), then stops for owner review; it never proceeds to `/execute` on its own
 
 ## VALIDATION REPORTING
 

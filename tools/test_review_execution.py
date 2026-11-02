@@ -3,8 +3,9 @@
 
 Covers the deterministic core: reviewer-JSON parsing/validation, path
 normalization, file-operation verification against the filesystem, overall
-status computation, checklist rendering, and review saving (reruns replace).
-The live LLM call itself is exercised by calibration runs, not here.
+status computation, checklist rendering, review saving (reruns replace),
+and loop-state budget accounting. The live LLM call itself is exercised by
+calibration runs, not here.
 
 Run:  python3 tools/test_review_execution.py   (from the repository root)
 """
@@ -16,6 +17,7 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.request
 
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                       "review-execution.py")
@@ -321,6 +323,240 @@ class WriteReviewFileTests(unittest.TestCase):
             self.assertEqual(open(first).read(), "one\n")
             second = re.write_review_file(d, "x-plan.md", "two")
             self.assertEqual((second, open(first).read()), (first, "two\n"))
+
+
+class _FakeAnthropicResponse:
+    """Minimal urlopen stand-in serving one canned Messages payload."""
+
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class ProviderTests(unittest.TestCase):
+    def base_config(self, **overrides):
+        config = {"api_url": "http://x", "model": "m", "api_key_env": "K",
+                  "max_output_tokens": 1, "temperature": 0}
+        config.update(overrides)
+        return config
+
+    def run_main_with(self, root, config, post_openai, post_anthropic):
+        plan = os.path.join(root, "x-plan.md")
+        report = os.path.join(root, "x-report.md")
+        with open(plan, "w") as f:
+            f.write("# plan\n")
+        with open(report, "w") as f:
+            f.write("# report\n")
+        orig = (re.post_chat_completion, re.post_anthropic_messages,
+                re.get_api_key, re.load_config)
+        re.post_chat_completion = post_openai
+        re.post_anthropic_messages = post_anthropic
+        re.get_api_key = lambda env: "test-key"
+        re.load_config = lambda path: config
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    return re.main(["--plan", plan, "--report", report,
+                                    "--reviews-dir",
+                                    os.path.join(root, "stage")])
+        finally:
+            (re.post_chat_completion, re.post_anthropic_messages,
+             re.get_api_key, re.load_config) = orig
+
+    def test_anthropic_provider_uses_messages_transport(self):
+        def fail_openai(*args):
+            raise AssertionError("openai transport must not be used")
+
+        def fake_anthropic(*args):
+            return json.dumps({"validations": [], "files": [],
+                               "needs_attention": [], "delegate_prompt": "",
+                               "human_checks": []})
+
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(
+                self.run_main_with(
+                    d, self.base_config(provider="anthropic"),
+                    fail_openai, fake_anthropic), 0)
+
+    def test_missing_provider_defaults_to_openai(self):
+        def fake_openai(*args):
+            return json.dumps({"validations": [], "files": [],
+                               "needs_attention": [], "delegate_prompt": "",
+                               "human_checks": []})
+
+        def fail_anthropic(*args):
+            raise AssertionError("anthropic transport must not be used")
+
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(
+                self.run_main_with(
+                    d, self.base_config(), fake_openai, fail_anthropic), 0)
+
+    def test_unknown_provider_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(
+                self.run_main_with(
+                    d, self.base_config(provider="bogus"),
+                    lambda *a: "", lambda *a: ""), 1)
+
+    def call_anthropic(self, payload):
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["request"] = request
+            return _FakeAnthropicResponse(payload)
+
+        real = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                return re.post_anthropic_messages(
+                    "http://x", "k", "m", 10, 0, "sys", "user"), seen
+        finally:
+            urllib.request.urlopen = real
+
+    def test_anthropic_extracts_text_blocks_only(self):
+        out, _ = self.call_anthropic({
+            "content": [{"type": "thinking", "text": "hmm"},
+                        {"type": "text", "text": '{"validations": []}'}],
+            "stop_reason": "end_turn", "usage": {}})
+        self.assertEqual(out, '{"validations": []}')
+
+    def test_anthropic_request_omits_temperature(self):
+        _, seen = self.call_anthropic({
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn", "usage": {}})
+        body = json.loads(seen["request"].data.decode("utf-8"))
+        self.assertEqual(set(body),
+                         {"model", "system", "messages", "max_tokens"})
+        self.assertEqual(body["messages"],
+                         [{"role": "user", "content": "user"}])
+
+    def test_anthropic_max_tokens_is_fatal(self):
+        with self.assertRaises(re.ReviewError):
+            self.call_anthropic({"content": [], "stop_reason": "max_tokens",
+                                 "usage": {}})
+
+
+class HumanHandoffTests(unittest.TestCase):
+    def test_execution_handoff_does_not_imply_blanket_approval(self):
+        text = re.render_review(
+            "NOT_VERIFIED", [], [],
+            [{"finding": "Owner decision: Current: missing access. Proposed: owner verifies. Why: evidence needed."}],
+            [], "Muse: record owner decision and queued checks.", "*prov*")
+        self.assertIn("Confirm any owner choices", text)
+        self.assertNotIn("as-is", text)
+        self.assertIn("existing correction limit", text)
+        self.assertIn("Muse builds and executes; you decide", text)
+
+
+FOLLOW_UPS = """# Report
+
+## Follow-up Validation (cycle 1)
+
+First pass.
+
+## Follow-up Validation (cycle 2)
+
+Second pass.
+"""
+
+
+class LoopStateTests(unittest.TestCase):
+    def test_no_history_starts_fresh(self):
+        self.assertEqual(re.loop_state("# report\n", None),
+                         {"cycles_total": 0, "corrections_used": 0,
+                          "corrections_remaining": 3, "next_cycle_number": 1})
+
+    def test_legacy_unnumbered_section_counts_as_cycle_1(self):
+        state = re.loop_state("# R\n\n## Follow-up Validation\n\nOld.\n", 1)
+        self.assertEqual((state["cycles_total"],
+                          state["corrections_remaining"],
+                          state["next_cycle_number"]), (1, 3, 2))
+
+    def test_history_does_not_consume_budget(self):
+        """Regression: historical sections still leave a fresh run 3 passes."""
+        state = re.loop_state(FOLLOW_UPS, 2)
+        self.assertEqual((state["cycles_total"], state["corrections_used"],
+                          state["corrections_remaining"],
+                          state["next_cycle_number"]), (2, 0, 3, 3))
+        # A fresh query at invocation start also reports a full budget.
+        self.assertEqual(re.loop_state(FOLLOW_UPS, None)[
+            "corrections_remaining"], 3)
+
+    def test_spend_counts_this_run_only(self):
+        text = FOLLOW_UPS + "\n## Follow-up Validation (cycle 3)\n\nThird.\n"
+        state = re.loop_state(text, 2)
+        self.assertEqual((state["corrections_used"],
+                          state["corrections_remaining"],
+                          state["next_cycle_number"]), (1, 2, 4))
+
+    def test_budget_exhausted_after_three_passes(self):
+        text = FOLLOW_UPS
+        for n in (3, 4, 5):
+            text += f"\n## Follow-up Validation (cycle {n})\n\nPass {n}.\n"
+        state = re.loop_state(text, 2)
+        self.assertEqual((state["corrections_used"],
+                          state["corrections_remaining"]), (3, 0))
+
+    def test_ignores_malformed_sections(self):
+        text = FOLLOW_UPS + "\n## Follow-up Validation (cycle soon)\n\nX.\n"
+        text += "\n## Follow-up Validation notes\n\nY.\n"
+        self.assertEqual(re.parse_cycle_numbers(text), [1, 2])
+
+    def test_loop_state_cli(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = os.path.join(d, "x-plan.md")
+            report = os.path.join(d, "x-report.md")
+            with open(plan, "w") as f:
+                f.write("# plan\n")
+            with open(report, "w") as f:
+                f.write(FOLLOW_UPS)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = re.main(["--loop-state", "--plan", plan,
+                              "--report", report, "--run-start", "0"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(
+                out.getvalue(),
+                "cycles_total: 2\ncorrections_used: 2\n"
+                "corrections_remaining: 1\nnext_cycle_number: 3\n")
+
+    def test_loop_state_cli_missing_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = os.path.join(d, "x-plan.md")
+            with open(plan, "w") as f:
+                f.write("# plan\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(
+                        re.main(["--loop-state", "--plan", plan,
+                                 "--report", "/nonexistent-report.md"]), 1)
+
+
+class PromptCalibrationTests(unittest.TestCase):
+    """Pin the anti-nitpick and convergence rules in the reviewer prompt."""
+
+    def test_convergence_rules_present(self):
+        self.assertIn("never dribble out new findings", re.SYSTEM_PROMPT)
+        self.assertIn("Never re-raise an item the follow-ups resolved",
+                      re.SYSTEM_PROMPT)
+
+    def test_owner_bar_and_settled_decisions_present(self):
+        self.assertIn("would plausibly block the deliverable",
+                      re.SYSTEM_PROMPT)
+        self.assertIn("do not second-guess approach choices",
+                      re.SYSTEM_PROMPT)
+        self.assertIn("never to polish an already convincing record",
+                      re.SYSTEM_PROMPT)
 
 
 if __name__ == "__main__":
