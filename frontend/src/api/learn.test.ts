@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { getExplanation, postExplain, postRegenerate } from './learn'
+import {
+  createMarker,
+  getExplanation,
+  listExplanations,
+  listMarkers,
+  postExplain,
+  postRegenerate,
+} from './learn'
 
 function mockFetch(payload: unknown, ok = true, status = 200, statusText = 'OK') {
   return vi.fn().mockResolvedValue({
@@ -48,6 +55,40 @@ describe('learn client', () => {
     vi.stubGlobal('fetch', mockFetch({ detail: 'x' }, false, 502, 'Bad Gateway'))
     await expect(postExplain({ concept: 'RAG' })).rejects.toThrow(
       'API request failed: 502 Bad Gateway',
+    )
+  })
+
+  it('listExplanations GETs the bare list path without a concept', async () => {
+    const fetch = mockFetch([])
+    vi.stubGlobal('fetch', fetch)
+    await listExplanations()
+    expect(fetch.mock.calls[0][0]).toBe('http://localhost:8000/api/v1/learn/explanations')
+  })
+
+  it('listExplanations encodes the concept filter', async () => {
+    const fetch = mockFetch([])
+    vi.stubGlobal('fetch', fetch)
+    await listExplanations('RAG retrieval')
+    expect(fetch.mock.calls[0][0]).toBe(
+      'http://localhost:8000/api/v1/learn/explanations?concept=RAG%20retrieval',
+    )
+  })
+
+  it('createMarker POSTs the marker body to the markers path', async () => {
+    const fetch = mockFetch({ marker_id: 'm-1' })
+    vi.stubGlobal('fetch', fetch)
+    await createMarker('exp-1', { scope: 'step', step: 'mapping' })
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('http://localhost:8000/api/v1/learn/explanations/exp-1/markers')
+    expect(JSON.parse(init.body)).toEqual({ scope: 'step', step: 'mapping' })
+  })
+
+  it('listMarkers GETs the markers path', async () => {
+    const fetch = mockFetch([])
+    vi.stubGlobal('fetch', fetch)
+    await listMarkers('exp-1')
+    expect(fetch.mock.calls[0][0]).toBe(
+      'http://localhost:8000/api/v1/learn/explanations/exp-1/markers',
     )
   })
 })

@@ -16,7 +16,13 @@ from app.core.config import Settings, get_settings
 from app.core.grounding import STEP_KEYS
 from app.core.meta_client import MetaAPIError
 from app.db.connection import init_db
-from app.db.explanations import ExplanationDetail
+from app.db.explanations import (
+    ExplanationDetail,
+    create_explanation,
+    create_marker,
+    list_markers,
+)
+from app.db.explanations import get_explanation as repo_get_explanation
 from app.llm.explainer import ExplainedResult, ExplainerValidationError
 from app.main import create_app
 
@@ -233,3 +239,273 @@ def test_query_context_forces_teaching(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert any(
         "In-progress eight-step lesson" in m["content"] for m in record[0] if m["role"] == "system"
     )
+
+
+# --- Explanation memory (deliverable 2): real-repo tests over seeded tmp DBs ---
+
+STAGE_A = {"definition": "RAG defined.", "familiar_system": "A library."}
+STAGE_B = {
+    "analogy": "Full analogy.",
+    "mapping": ["X maps to Y because Z."],
+    "walkthrough": "Walk.",
+}
+STAGE_C = {"placement": "Place.", "interview_ready": "Ready.", "limitations": "Limits."}
+
+
+def _mkexplanation(db: str, concept: str, version: int = 1, reused_from=None):
+    return create_explanation(
+        db, concept, version, dict(STEPS), list(STEPS["mapping"]), "l", reused_from
+    )
+
+
+def _seeded_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, seed_fn):
+    """TestClient over a tmp DB pre-seeded via repo fns; returns (client, db_path)."""
+    db = str(tmp_path / "learn_api_seeded.db")
+    init_db(db)
+    seed_fn(db)
+    monkeypatch.setenv("DATABASE_PATH", db)
+    monkeypatch.setenv("MODEL_API_KEY", "test-key")
+    return TestClient(create_app()), db
+
+
+def test_list_explanations_shape_order_and_counts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        a = _mkexplanation(db, "RAG", 1)
+        _mkexplanation(db, "RAG", 2)
+        _mkexplanation(db, "RAG", 3, reused_from=a.id)
+        create_marker(db, a.id, "explanation", None, "clicked")
+        box["a_id"] = a.id
+
+    client, _db = _seeded_client(monkeypatch, tmp_path, seed)
+    response = client.get("/api/v1/learn/explanations")
+    assert response.status_code == 200
+    body = response.json()
+    assert [r["version"] for r in body] == [3, 2, 1]
+    assert set(body[0].keys()) == {
+        "id",
+        "concept",
+        "version",
+        "created_at",
+        "reused_from",
+        "reuse_count",
+        "marked",
+        "marker_count",
+        "attempt_count",
+    }
+    v1 = next(r for r in body if r["version"] == 1)
+    assert (v1["marked"], v1["reuse_count"], v1["marker_count"], v1["attempt_count"]) == (
+        True,
+        1,
+        1,
+        0,
+    )
+    assert body[0]["reused_from"] == v1["id"]
+
+
+def test_list_explanations_concept_filter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def seed(db: str) -> None:
+        _mkexplanation(db, "RAG")
+        _mkexplanation(db, "SQLAlchemy")
+
+    client, _db = _seeded_client(monkeypatch, tmp_path, seed)
+    match = client.get("/api/v1/learn/explanations", params={"concept": "  rag "})
+    assert match.status_code == 200
+    assert [r["concept"] for r in match.json()] == ["RAG"]
+    assert client.get("/api/v1/learn/explanations", params={"concept": "nope"}).json() == []
+    blank = client.get("/api/v1/learn/explanations", params={"concept": "   "})
+    assert blank.status_code == 422
+    assert "concept filter" in blank.json()["detail"]
+
+
+def test_create_marker_happy_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        box["id"] = _mkexplanation(db, "RAG").id
+
+    client, db = _seeded_client(monkeypatch, tmp_path, seed)
+    url = f"/api/v1/learn/explanations/{box['id']}/markers"
+    whole = client.post(url, json={"scope": "explanation", "step": None, "note": "yes"})
+    assert whole.status_code == 201
+    assert set(whole.json().keys()) == {"marker_id", "explanation_id", "scope", "step"}
+    assert whole.json()["scope"] == "explanation"
+    assert whole.json()["explanation_id"] == box["id"]
+    step = client.post(url, json={"scope": "step", "step": "mapping"})
+    assert step.status_code == 201
+    assert step.json()["step"] == "mapping"
+    assert len(list_markers(db, box["id"])) == 2
+
+
+def test_create_marker_unknown_explanation_404(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/v1/learn/explanations/" + "0" * 32 + "/markers",
+        json={"scope": "explanation"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "explanation not found"
+
+
+def test_create_marker_step_scope_validation_422(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        box["id"] = _mkexplanation(db, "RAG").id
+
+    client, _db = _seeded_client(monkeypatch, tmp_path, seed)
+    url = f"/api/v1/learn/explanations/{box['id']}/markers"
+    missing = client.post(url, json={"scope": "step"})
+    assert missing.status_code == 422
+    for key in STEP_KEYS:
+        assert key in missing.json()["detail"]
+    bogus = client.post(url, json={"scope": "step", "step": "bogus"})
+    assert bogus.status_code == 422
+    for key in STEP_KEYS:
+        assert key in bogus.json()["detail"]
+
+
+def test_create_marker_scope_step_mismatch_422(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        box["id"] = _mkexplanation(db, "RAG").id
+
+    client, _db = _seeded_client(monkeypatch, tmp_path, seed)
+    url = f"/api/v1/learn/explanations/{box['id']}/markers"
+    mismatch = client.post(url, json={"scope": "explanation", "step": "mapping"})
+    assert mismatch.status_code == 422
+    assert "null" in mismatch.json()["detail"]
+    bad_scope = client.post(url, json={"scope": "bogus"})
+    assert bad_scope.status_code == 422
+
+
+def test_create_marker_duplicates_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        box["id"] = _mkexplanation(db, "RAG").id
+
+    client, _db = _seeded_client(monkeypatch, tmp_path, seed)
+    url = f"/api/v1/learn/explanations/{box['id']}/markers"
+    first = client.post(url, json={"scope": "explanation"})
+    second = client.post(url, json={"scope": "explanation", "note": "again"})
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["marker_id"] != second.json()["marker_id"]
+    listed = client.get("/api/v1/learn/explanations").json()
+    assert (listed[0]["marked"], listed[0]["marker_count"]) == (True, 2)
+
+
+def test_list_markers_shape_order_and_404(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        eid = _mkexplanation(db, "RAG").id
+        create_marker(db, eid, "explanation", None, "n1")
+        create_marker(db, eid, "step", "mapping", "n2")
+        box["id"] = eid
+
+    client, _db = _seeded_client(monkeypatch, tmp_path, seed)
+    response = client.get(f"/api/v1/learn/explanations/{box['id']}/markers")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert set(body[0].keys()) == {"id", "explanation_id", "scope", "step", "note", "created_at"}
+    assert {m["note"] for m in body} == {"n1", "n2"}
+    assert body[0]["created_at"] <= body[1]["created_at"]
+    unknown = client.get("/api/v1/learn/explanations/" + "0" * 32 + "/markers")
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"] == "explanation not found"
+
+
+def test_explain_wires_real_memory_marked_preferred(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        older = _mkexplanation(db, "RAG", 1)
+        _mkexplanation(db, "RAG", 2)
+        create_marker(db, older.id, "explanation", None, "")
+        box["older"] = older.id
+
+    client, db = _seeded_client(monkeypatch, tmp_path, seed)
+    queue = [json.dumps(STAGE_A), json.dumps(STAGE_B), json.dumps(STAGE_C)]
+
+    async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
+        return queue.pop(0)
+
+    monkeypatch.setattr("app.api.learn.chat_completion", fake_chat)
+    response = client.post("/api/v1/learn/explain", json={"concept": "rag"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reused_from"] == box["older"]
+    assert sorted(body["steps"].keys()) == sorted(STEP_KEYS)
+    got = repo_get_explanation(db, body["explanation_id"])
+    assert got is not None
+    # Versioning stays exact-string ("rag" is a new exact concept → v1) while
+    # memory matched across case — the plan text said v3, corrected here.
+    assert (got.concept, got.version, got.reused_from) == ("rag", 1, box["older"])
+
+
+def test_explain_no_memory_returns_null_reused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    queue = [json.dumps(STAGE_A), json.dumps(STAGE_B), json.dumps(STAGE_C)]
+
+    async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
+        return queue.pop(0)
+
+    monkeypatch.setattr("app.api.learn.chat_completion", fake_chat)
+    response = client.post("/api/v1/learn/explain", json={"concept": "RAG"})
+    assert response.status_code == 200
+    assert response.json()["reused_from"] is None
+    assert sorted(response.json()["steps"].keys()) == sorted(STEP_KEYS)
+
+
+def test_explain_and_regen_create_no_markers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    box: dict = {}
+
+    def seed(db: str) -> None:
+        box["id"] = _mkexplanation(db, "RAG").id
+
+    client, db = _seeded_client(monkeypatch, tmp_path, seed)
+    queue = [
+        json.dumps(STAGE_A),
+        json.dumps(STAGE_B),
+        json.dumps(STAGE_C),
+        json.dumps({"step": "analogy", "content": "NEW-ANALOGY"}),
+    ]
+
+    async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
+        return queue.pop(0)
+
+    monkeypatch.setattr("app.api.learn.chat_completion", fake_chat)
+    taught = client.post("/api/v1/learn/explain", json={"concept": "RAG"})
+    assert taught.status_code == 200
+    new_id = taught.json()["explanation_id"]
+    assert taught.json()["reused_from"] == box["id"]
+    regened = client.post(
+        f"/api/v1/learn/explanations/{new_id}/regenerate", json={"step": "analogy"}
+    )
+    assert regened.status_code == 200
+    regen_id = regened.json()["explanation_id"]
+    assert regened.json()["reused_from"] is None
+    assert list_markers(db, new_id) == []
+    assert list_markers(db, regen_id) == []
+    got = repo_get_explanation(db, regen_id)
+    assert got is not None
+    assert got.reused_from is None

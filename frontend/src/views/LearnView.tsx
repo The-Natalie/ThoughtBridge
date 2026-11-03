@@ -1,11 +1,19 @@
 import { useState } from 'react'
 
-import { getExplanation, postExplain, postRegenerate } from '../api/learn'
+import {
+  createMarker,
+  getExplanation,
+  listExplanations,
+  listMarkers,
+  postExplain,
+  postRegenerate,
+} from '../api/learn'
 import { postQuery } from '../api/query'
 import type {
   ExplainRequest,
   ExplanationDetail,
   ExplanationSteps,
+  ExplanationSummary,
   LegacyMappingItem,
 } from '../api/types'
 
@@ -53,6 +61,12 @@ function LearnView() {
   const [askInput, setAskInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [noteInput, setNoteInput] = useState('')
+  const [wholeMarked, setWholeMarked] = useState(false)
+  const [stepMarked, setStepMarked] = useState<Record<string, boolean>>({})
+  const [notice, setNotice] = useState<{ text: string; priorId: string } | null>(null)
+  const [history, setHistory] = useState<ExplanationSummary[] | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   async function teach() {
     const concept = conceptInput.trim()
@@ -69,6 +83,24 @@ function LearnView() {
       setStepIndex(0)
       setThreads({})
       setConversationId(null)
+      setNoteInput('')
+      setWholeMarked(false)
+      setStepMarked({})
+      setNotice(null)
+      setHistory(null)
+      setHistoryOpen(false)
+      if (response.reused_from) {
+        const [, markers] = await Promise.all([
+          getExplanation(response.reused_from),
+          listMarkers(response.reused_from),
+        ])
+        setNotice({
+          text: markers.some((m) => m.scope === 'explanation')
+            ? 'This builds on an explanation that clicked for you before.'
+            : 'This builds on your earlier explanation.',
+          priorId: response.reused_from,
+        })
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed')
     } finally {
@@ -112,11 +144,99 @@ function LearnView() {
       })
       const detail = await getExplanation(response.explanation_id)
       setExplanation(detail)
+      setNoteInput('')
+      setWholeMarked(false)
+      setStepMarked({})
+      setNotice(null)
+      setHistory(null)
+      setHistoryOpen(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed')
     } finally {
       setLoading(false)
     }
+  }
+
+  async function markWhole() {
+    if (loading || !explanation) return
+    setLoading(true)
+    setError(null)
+    try {
+      await createMarker(explanation.id, {
+        scope: 'explanation',
+        step: null,
+        ...(noteInput.trim() ? { note: noteInput.trim() } : {}),
+      })
+      setWholeMarked(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function markStep() {
+    if (loading || !explanation) return
+    const current = STEP_KEYS[stepIndex]
+    setLoading(true)
+    setError(null)
+    try {
+      await createMarker(explanation.id, {
+        scope: 'step',
+        step: current,
+        ...(noteInput.trim() ? { note: noteInput.trim() } : {}),
+      })
+      setStepMarked((prev) => ({ ...prev, [current]: true }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function toggleHistory() {
+    if (historyOpen) {
+      setHistoryOpen(false)
+      setHistory(null)
+      return
+    }
+    if (loading || !explanation) return
+    setLoading(true)
+    setError(null)
+    try {
+      const items = await listExplanations(explanation.concept)
+      setHistory(items)
+      setHistoryOpen(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadVersion(id: string) {
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    try {
+      const detail = await getExplanation(id)
+      setExplanation(detail)
+      setStepIndex(0)
+      setThreads({})
+      setConversationId(null)
+      setNoteInput('')
+      setWholeMarked(false)
+      setStepMarked({})
+      setNotice(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function viewPrior() {
+    if (notice) void loadVersion(notice.priorId)
   }
 
   function startOver() {
@@ -128,6 +248,12 @@ function LearnView() {
     setHintInput('')
     setAskInput('')
     setError(null)
+    setNoteInput('')
+    setWholeMarked(false)
+    setStepMarked({})
+    setNotice(null)
+    setHistory(null)
+    setHistoryOpen(false)
   }
 
   const step = STEP_KEYS[stepIndex]
@@ -195,6 +321,25 @@ function LearnView() {
             </button>
           </div>
 
+          {notice && (
+            <div
+              role="status"
+              aria-label="Reuse notice"
+              className="rounded border px-3 py-2 text-sm"
+            >
+              <span>{notice.text}</span>{' '}
+              <button
+                type="button"
+                aria-label="View prior explanation"
+                onClick={() => viewPrior()}
+                disabled={loading}
+                className="underline"
+              >
+                View prior
+              </button>
+            </div>
+          )}
+
           <nav aria-label="Lesson steps" className="flex flex-wrap gap-1">
             {STEP_KEYS.map((key, i) => (
               <button
@@ -230,6 +375,35 @@ function LearnView() {
                 </p>
               ))
             )}
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              aria-label="What clicked (optional note)"
+              value={noteInput}
+              onChange={(e) => setNoteInput(e.target.value)}
+              placeholder="What clicked? (optional)"
+              disabled={loading}
+              className="flex-1 rounded border px-3 py-1 text-sm"
+            />
+            <button
+              type="button"
+              aria-label="Mark whole explanation as clicked"
+              onClick={() => void markWhole()}
+              disabled={loading || wholeMarked}
+              className="rounded border px-3 py-1 text-sm"
+            >
+              {wholeMarked ? 'Clicked ✓' : 'This clicked'}
+            </button>
+            <button
+              type="button"
+              aria-label="Mark this step as clicked"
+              onClick={() => void markStep()}
+              disabled={loading || (stepMarked[step] ?? false)}
+              className="rounded border px-3 py-1 text-sm"
+            >
+              {stepMarked[step] ? 'Clicked ✓' : 'This step clicked'}
+            </button>
           </div>
 
           {(threads[step] ?? []).length > 0 && (
@@ -294,6 +468,36 @@ function LearnView() {
             >
               Next
             </button>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              aria-label={historyOpen ? 'Hide earlier versions' : 'Show earlier versions'}
+              onClick={() => void toggleHistory()}
+              disabled={loading}
+              className="rounded border px-3 py-1 text-sm"
+            >
+              {historyOpen ? 'Hide earlier versions' : 'Show earlier versions'}
+            </button>
+            {historyOpen && history && (
+              <div aria-label="Earlier versions" className="flex flex-wrap gap-1">
+                {history.map((h) => (
+                  <button
+                    key={h.id}
+                    type="button"
+                    aria-label={`Load version ${h.version}`}
+                    aria-current={h.id === explanation.id ? 'true' : undefined}
+                    onClick={() => void loadVersion(h.id)}
+                    disabled={loading}
+                    className="rounded border px-2 py-0.5 text-xs"
+                  >
+                    v{h.version}
+                    {h.marked ? ' ✓' : ''}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

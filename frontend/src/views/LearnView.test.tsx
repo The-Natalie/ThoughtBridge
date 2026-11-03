@@ -209,4 +209,158 @@ describe('LearnView', () => {
     fireEvent.click(screen.getByLabelText('Step: mapping'))
     expect(screen.getByText('librarian — retriever: finds things')).toBeDefined()
   })
+
+  it('marks the whole explanation as clicked with an optional note', async () => {
+    const fetch = mockFetchSequence([
+      explainResponse(),
+      explanationDetail(),
+      { marker_id: 'm-1', explanation_id: 'exp-1', scope: 'explanation', step: null },
+    ])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    fireEvent.change(screen.getByLabelText('What clicked (optional note)'), {
+      target: { value: 'librarian clicked' },
+    })
+    fireEvent.click(screen.getByLabelText('Mark whole explanation as clicked'))
+    expect(await screen.findByText('Clicked ✓')).toBeDefined()
+    const [url, init] = fetch.mock.calls[2]
+    expect(url).toBe('http://localhost:8000/api/v1/learn/explanations/exp-1/markers')
+    expect(JSON.parse(init.body)).toEqual({
+      scope: 'explanation',
+      step: null,
+      note: 'librarian clicked',
+    })
+    expect(
+      (screen.getByLabelText('Mark whole explanation as clicked') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+  })
+
+  it('marks the current step as clicked without a note key when empty', async () => {
+    const fetch = mockFetchSequence([explainResponse(), explanationDetail(), { marker_id: 'm-2' }])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    fireEvent.click(screen.getByLabelText('Step: mapping'))
+    fireEvent.click(screen.getByLabelText('Mark this step as clicked'))
+    expect(await screen.findByText('Clicked ✓')).toBeDefined()
+    const [url, init] = fetch.mock.calls[2]
+    expect(url).toBe('http://localhost:8000/api/v1/learn/explanations/exp-1/markers')
+    expect(JSON.parse(init.body)).toEqual({ scope: 'step', step: 'mapping' })
+    fireEvent.click(screen.getByLabelText('Step: definition'))
+    expect(screen.getByLabelText('Mark this step as clicked').textContent).toBe(
+      'This step clicked',
+    )
+  })
+
+  it('shows a clicked-before notice with view-prior when reusing a marked explanation', async () => {
+    const fetch = mockFetchSequence([
+      explainResponse({ explanation_id: 'exp-2', reused_from: 'exp-0' }),
+      explanationDetail({ id: 'exp-2', version: 2 }),
+      explanationDetail({ id: 'exp-0', version: 1 }),
+      [
+        {
+          id: 'm-0',
+          explanation_id: 'exp-0',
+          scope: 'explanation',
+          step: null,
+          note: '',
+          created_at: 't',
+        },
+      ],
+      explanationDetail({
+        id: 'exp-0',
+        version: 1,
+        steps: { ...STEPS, definition: 'PRIOR-DEF' },
+      }),
+    ])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    expect(await screen.findByLabelText('Reuse notice')).toBeDefined()
+    expect(
+      screen.getByText('This builds on an explanation that clicked for you before.'),
+    ).toBeDefined()
+    fireEvent.click(screen.getByLabelText('View prior explanation'))
+    expect(fetch.mock.calls[4][0]).toBe(
+      'http://localhost:8000/api/v1/learn/explanations/exp-0',
+    )
+    expect(await screen.findByText('PRIOR-DEF')).toBeDefined()
+  })
+
+  it('shows a plain reuse notice when the prior explanation is unmarked', async () => {
+    const fetch = mockFetchSequence([
+      explainResponse({ explanation_id: 'exp-2', reused_from: 'exp-0' }),
+      explanationDetail({ id: 'exp-2', version: 2 }),
+      explanationDetail({ id: 'exp-0', version: 1 }),
+      [],
+    ])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    const notice = await screen.findByLabelText('Reuse notice')
+    expect(notice.textContent).toContain('This builds on your earlier explanation.')
+    expect(notice.textContent).not.toContain('clicked for you before')
+  })
+
+  it('toggles earlier versions with marked badges and loads on click', async () => {
+    const history = [
+      {
+        id: 'exp-2',
+        concept: 'RAG',
+        version: 2,
+        created_at: 't2',
+        reused_from: 'exp-1',
+        reuse_count: 0,
+        marked: false,
+        marker_count: 0,
+        attempt_count: 0,
+      },
+      {
+        id: 'exp-1',
+        concept: 'RAG',
+        version: 1,
+        created_at: 't1',
+        reused_from: null,
+        reuse_count: 1,
+        marked: true,
+        marker_count: 1,
+        attempt_count: 0,
+      },
+    ]
+    const fetch = mockFetchSequence([
+      explainResponse({ explanation_id: 'exp-2' }),
+      explanationDetail({ id: 'exp-2', version: 2 }),
+      history,
+      explanationDetail({ id: 'exp-1', version: 1, steps: { ...STEPS, definition: 'V1-DEF' } }),
+    ])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    fireEvent.click(screen.getByLabelText('Show earlier versions'))
+    expect(await screen.findByLabelText('Earlier versions')).toBeDefined()
+    expect(fetch.mock.calls[2][0]).toBe(
+      'http://localhost:8000/api/v1/learn/explanations?concept=RAG',
+    )
+    expect(screen.getByLabelText('Load version 1').textContent).toContain('✓')
+    expect(screen.getByLabelText('Load version 2').textContent).not.toContain('✓')
+    fireEvent.click(screen.getByLabelText('Load version 1'))
+    expect(fetch.mock.calls[3][0]).toBe(
+      'http://localhost:8000/api/v1/learn/explanations/exp-1',
+    )
+    expect(await screen.findByText('V1-DEF')).toBeDefined()
+    fireEvent.click(screen.getByLabelText('Hide earlier versions'))
+    expect(screen.queryByLabelText('Earlier versions')).toBeNull()
+  })
+
+  it('renders a dismissible alert when marking fails', async () => {
+    const fetch = mockFetchSequence([
+      explainResponse(),
+      explanationDetail(),
+      new Error('mark boom'),
+    ])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    fireEvent.click(screen.getByLabelText('Mark whole explanation as clicked'))
+    expect(await screen.findByRole('alert')).toBeDefined()
+    expect(screen.getByText('mark boom')).toBeDefined()
+    fireEvent.click(screen.getByLabelText('Dismiss error'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

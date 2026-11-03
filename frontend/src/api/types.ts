@@ -102,3 +102,32 @@ export interface RegenerateRequest {
 }
 
 export type RegenerateResponse = ExplainResponse
+
+export type MarkerScope = 'explanation' | 'step'
+
+export interface MarkerCreate {
+  scope: MarkerScope
+  step?: string | null
+  note?: string
+}
+
+export interface MarkerOut {
+  id: string
+  explanation_id: string
+  scope: MarkerScope
+  step: string | null
+  note: string
+  created_at: string
+}
+
+export interface ExplanationSummary {
+  id: string
+  concept: string
+  version: number
+  created_at: string
+  reused_from: string | null
+  reuse_count: number
+  marked: boolean
+  marker_count: number
+  attempt_count: number
+}
