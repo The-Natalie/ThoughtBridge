@@ -5,6 +5,7 @@ description = "ThoughtBridge backend — FastAPI + SQLite RAG API (hackathon MVP
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
+    "aiofiles",
     "fastapi[standard]>=0.136",
     "httpx>=0.28",
     "pydantic>=2.6",
@@ -19,6 +20,7 @@ dev = [
     "pytest",
     "ruff",
     "mypy",
+    "modal[api-proxy-support]>=1.0",
 ]
 
 [tool.uv]

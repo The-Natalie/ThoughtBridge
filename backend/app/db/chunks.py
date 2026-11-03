@@ -59,11 +59,17 @@ def search_bm25_ids(db_path: str, match_expr: str, limit: int) -> list[int]:
 
 
 def search_vector_ids(db_path: str, query_vec: list[float], limit: int) -> list[int]:
-    """Chunk IDs nearest the query vector, best-first (smaller distance first)."""
+    """Chunk IDs nearest the query vector, best-first (smaller distance first).
+
+    Uses the canonical ``k = ?`` KNN constraint (not a bare parameterized
+    LIMIT): some SQLite builds do not propagate a bound LIMIT to the vec0
+    module, which then rejects the query ("A LIMIT or 'k = ?' constraint is
+    required"). Found via Modal deploy (CHECKPOINT 2).
+    """
     conn = connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT rowid FROM chunks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            "SELECT rowid FROM chunks_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
             (struct.pack(f"{len(query_vec)}f", *query_vec), limit),
         ).fetchall()
     finally:

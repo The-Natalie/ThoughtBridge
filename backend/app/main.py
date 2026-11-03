@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.health import liveness_router as health_liveness_router
 from app.api.health import router as health_router
@@ -17,6 +19,8 @@ from app.api.retrieval import router as retrieval_router
 from app.core.config import get_settings
 from app.db.connection import check_embedding_dim, init_db
 from app.retrieval.embedder import EMBEDDING_DIM
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -51,6 +55,13 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(query_router, prefix="/api/v1")
     app.include_router(health_liveness_router)
+    settings = get_settings()
+    if settings.static_dir:
+        static_path = Path(settings.static_dir)
+        if not static_path.is_dir():
+            raise RuntimeError(f"STATIC_DIR does not exist: {settings.static_dir}")
+        app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
+        logger.info("serving static dir: %s", static_path)
     return app
 
 

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     max_upload_mb: int = 10
     max_artifact_chars: int = 500_000
+    # Modal/single-URL static serving; None = API only (local dev)
+    static_dir: str | None = None
 
 
 @lru_cache
