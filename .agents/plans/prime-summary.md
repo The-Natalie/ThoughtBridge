@@ -1,6 +1,6 @@
 # Prime Summary — ThoughtBridge
 
-Organized by implementation phase. Current phase: **Phase 1**. Ordered build list: [.agents/plans/phase-1-build-list.md](phase-1-build-list.md).
+Organized by implementation phase. Current phase: **Phase 2**. Ordered build list: [.agents/plans/phase-2-build-list.md](phase-2-build-list.md).
 
 ## Phase 1 — Foundation & Retrieval (PRD §12)
 
@@ -46,3 +46,48 @@ Organized by implementation phase. Current phase: **Phase 1**. Ordered build lis
 
 - **Current phase:** Phase 1 — Foundation & retrieval. Goal: the pipeline lives and Meta API access is proven.
 - **Build list:** [.agents/plans/phase-1-build-list.md](phase-1-build-list.md) — 6 ordered Essential deliverables (scaffold → CHECKPOINT 1 → ingestion → retrieval → grounded Q&A + turn persistence → CHECKPOINT 2), each with scope boundaries, plus the validation gate and out-of-phase exclusions.
+
+## Phase 2 — Learning & Work (PRD §12)
+
+**Date:** 2026-11-02
+**Branch:** `main` (commit `230853b` — CHECKPOINT 2, Phase 1 complete)
+
+### Project Overview
+
+- **Purpose:** ThoughtBridge — AI-powered memory/learning app: analogy-based learning, work documentation with accomplishment recognition, interview prep grounded in real history.
+- **Type:** Full-stack web app, past greenfield — Phase 1 pipeline live: ingest → chunk → embed → hybrid retrieve → grounded Q&A, deployed on Modal with persistent SQLite volume.
+- **Primary stack:** Python 3.12 + FastAPI/Pydantic v2 (`uv`), single-file SQLite (FTS5 + sqlite-vec), fastembed BGE-small (384-dim), Meta Model API `muse-spark-1.3` via single client module, React 19 + TS + Vite + Tailwind 4.
+- **State:** PRD v1.2; all 6 Phase 1 deliverables committed Nov 1–2 with plans, execution reports, and independent reviews; live URL serving chat UI.
+
+### Architecture
+
+- **Shape:** one pipeline, three surfaces — Learn/Work views (this phase) build on the Phase 1 pipeline; no new subsystems.
+- **Patterns observed in code:** thin routers (`api/`) with logic in `ingest/`/`retrieval/`/`llm/`; shared grounding contracts in `core/grounding.py`; schema-at-the-boundary for LLM outputs (`llm/qa.py`); vector index as derived ordering only (hydration from canonical `chunks`); per-leg over-fetch + RRF fusion; append-only turn log with stable IDs.
+- **Directories:** `backend/app/{api,core,db,ingest,retrieval,llm}/` + `modal_app.py` (single-URL deploy); `frontend/src/{api,views}/` with `ChatView` live and Learn/Work/Practice/Interview as placeholder stubs; `.agents/` + `.claude/` + `tools/` remain owner workflow tooling, not product.
+
+### Tech Stack
+
+- **Languages:** Python 3.12 (pinned, `uv`); TypeScript (frontend).
+- **Frameworks/libs:** FastAPI 0.136+, Pydantic v2, sqlite-vec, fastembed, httpx (Meta client); React 19, Vite 8, Tailwind 4. `pypdf` + `python-docx` not yet installed (Phase 2 Preferred deliverable 6).
+- **Build/package managers:** `uv` + `uv.lock` (backend); `npm` + `package-lock.json` (frontend). Commands in AGENTS.md verified.
+- **Testing:** pytest (15 backend test files) + ruff + mypy (non-strict); vitest + oxlint (frontend). Deletion-cascade and no-evidence-mining tests still ahead (Phase 3).
+
+### Core Principles
+
+- **Anti-invention still load-bearing:** this phase adds extraction — discussion never upgrades to accomplishment; completion needs explicit user statements; reasoning links connect only grounded facts.
+- **Conventions:** `snake_case` backend / `PascalCase` components / plural `snake_case` tables; grounding prompts shared in `core/`, never copied per feature; citation/provenance rendering shared, not per-view.
+- **Docs:** PRD authoritative for scope; plans live in `.agents/plans/`, execution reports in `.agents/execution-reports/`; never commit `.env`, `conversation-log/`, or real secrets.
+
+### Current State
+
+- **Active branch:** `main`, clean, up to date with `origin/main`.
+- **Recent focus:** Nov 1–2 completed ingestion → hybrid retrieval → grounded Q&A + turn persistence → CHECKPOINT 2 (Modal deploy, persistent volume, write→redeploy→re-query proven).
+- **Observations/concerns:** (1) Schedule is tight — PRD allots Nov 1 to Phase 2 and Nov 2 to Phase 3; Phase 1 finished Nov 2, so Phases 2–3 must compress into ~2 days before Phase 4 (Nov 3–4, protected); (2) explainer/memory/profile deliverables are mutually dependent at runtime — the first plan must fix a build order (recommended: profile → memory → explainer); (3) the reference/articles guides are generic pre-hackathon workflow material, not product docs — no product guidance to extract from them.
+- **Constraints before implementation:** Meta-only LLM via `app/core/meta_client.py`; generous token budgets (Spark hidden reasoning burns `max_tokens`); competition-window code only; Preferred PDF/Word adapters are the first cut if behind; Phase 4 protected for demo/submission.
+- **Next highest-leverage task:** `/plan-feature` for Phase 2 deliverable 3 (learner-preferences profile — smallest, unblocks explainer prompt injection) or a combined 1–3 learning-slice plan; then work extraction (deliverable 4).
+- **Consult before implementing:** PRD §7 F-3/F-4/F-13 (learning), F-5/F-6 (work), §10 Learning + Work contracts, §12 Phase 2 gate; existing `core/grounding.py`, `llm/qa.py` (schema-validation pattern to reuse), `db/schema.sql` (explanations/markers/profiles tables already exist).
+
+### What's Next
+
+- **Current phase:** Phase 2 — Learning & work. Goal: the two defining capabilities function.
+- **Build list:** [.agents/plans/phase-2-build-list.md](phase-2-build-list.md) — 6 ordered deliverables (explainer + Learn view, explanation memory + markers, learner profile, work extraction + Work view, career profile + filtering, PDF/Word adapters Preferred), each with scope boundaries, plus the validation gate and out-of-phase exclusions.

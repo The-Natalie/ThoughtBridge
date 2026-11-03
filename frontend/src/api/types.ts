@@ -56,3 +56,49 @@ export interface ConversationSummary {
   created_at: string
   turn_count: number
 }
+
+export interface ExplainRequest {
+  concept: string
+  familiar_system_hint?: string | null
+}
+
+/** Pre-prose mapping rows (stored before mapping became passages). Render-only. */
+export interface LegacyMappingItem {
+  familiar: string
+  technical: string
+  note: string
+}
+
+export interface ExplanationSteps {
+  definition: string
+  familiar_system: string
+  analogy: string
+  mapping: string[]
+  walkthrough: string
+  placement: string
+  interview_ready: string
+  limitations: string
+}
+
+export interface ExplainResponse {
+  explanation_id: string
+  reused_from: string | null
+  steps: ExplanationSteps
+}
+
+export interface ExplanationDetail {
+  id: string
+  concept: string
+  version: number
+  steps: ExplanationSteps
+  mapping: string[]
+  limitations: string
+  reused_from: string | null
+  created_at: string
+}
+
+export interface RegenerateRequest {
+  step: string
+}
+
+export type RegenerateResponse = ExplainResponse

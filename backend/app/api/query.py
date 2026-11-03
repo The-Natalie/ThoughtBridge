@@ -1,9 +1,9 @@
 """Grounded Q&A endpoints — thin router over retrieval + llm/qa + conversations.
 
 `POST /query` answers one question (PRD §10); `GET /conversations` and
-`GET /conversations/{id}` read the persisted turn log. `context` is
-accepted but ignored in Phase 1 (forward-compat for Phase 2
-interrupt/resume); deletion stays Phase 3 work.
+`GET /conversations/{id}` read the persisted turn log. `context` carries
+`explanation_id` for Phase 2 interrupt/resume (forces teaching mode with the
+lesson as context); deletion stays Phase 3 work.
 
 Test seams: ``hybrid_search`` and ``chat_completion`` are imported BY NAME
 so tests can ``monkeypatch.setattr("app.api.query.hybrid_search", stub)``
@@ -19,7 +19,13 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.core.grounding import HistoryTurn, ModeUsed, QueryMode, select_history
+from app.core.grounding import (
+    HistoryTurn,
+    ModeUsed,
+    QueryMode,
+    build_explanation_context,
+    select_history,
+)
 from app.core.meta_client import DEFAULT_META_MODEL, MetaAPIError, chat_completion
 from app.db.connection import EmbeddingDimMismatchError
 from app.db.conversations import (
@@ -28,6 +34,7 @@ from app.db.conversations import (
     get_conversation,
     list_conversations,
 )
+from app.db.explanations import get_explanation
 from app.llm.qa import QaValidationError, answer_question
 from app.retrieval.search import TOP_K_DEFAULT, TOP_K_MAX, hybrid_search
 
@@ -105,6 +112,17 @@ async def post_query(body: QueryRequest) -> QueryResponse:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found"
             )
+    extra_system: str | None = None
+    mode_override: QueryMode = body.mode
+    if body.context and body.context.explanation_id:
+        source = get_explanation(db_path, body.context.explanation_id)
+        if source is None:
+            logger.warning("query rejected: unknown explanation %s", body.context.explanation_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="explanation not found"
+            )
+        extra_system = build_explanation_context(source.steps)
+        mode_override = "teaching"
     prior: list[HistoryTurn] = []
     if existing is not None:
         for turn in existing.turns:
@@ -135,12 +153,13 @@ async def post_query(body: QueryRequest) -> QueryResponse:
     try:
         result = await answer_question(
             question=body.question,
-            mode=body.mode,
+            mode=mode_override,
             top_k=body.top_k,
             db_path=db_path,
             search_fn=search_fn,
             chat_fn=chat_fn,
             history=tuple(history),
+            extra_system=extra_system,
         )
     except QaValidationError as exc:
         # BEFORE the generic ValueError branch: QaValidationError subclasses it.

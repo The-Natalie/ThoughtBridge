@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.health import liveness_router as health_liveness_router
 from app.api.health import router as health_router
 from app.api.ingest import router as ingest_router
+from app.api.learn import router as learn_router
 from app.api.query import router as query_router
 from app.api.retrieval import router as retrieval_router
 from app.core.config import get_settings
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     # router (DB only, deliberately different body) for deploy probes.
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(ingest_router, prefix="/api/v1")
+    app.include_router(learn_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(query_router, prefix="/api/v1")
     app.include_router(health_liveness_router)

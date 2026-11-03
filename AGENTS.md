@@ -125,6 +125,19 @@ Plus: dependency audit pass (`pip audit` / `npm audit`) or documented exceptions
 
 ---
 
+## Environment Constraints
+
+Sandboxed sessions deny all direct sockets (TCP/Unix bind and connect) — local servers (Uvicorn/Vite) and agent-browser's daemon cannot run there. Outbound HTTPS works only through the managed proxy.
+
+- Attempt each blocked local-server or sandboxed agent-browser command at most once per deliverable to confirm the block (record the exact error); never retry it across cycles.
+- Backend live checks: use in-process `TestClient` with the real key and a scratch DB — same routers, model calls, and persistence; document as an equivalent procedure.
+- Automated browser E2E: use the Playwright MCP browser against the deployed app URL, never localhost.
+- Always verify deployment freshness before browser E2E; an outdated deployment never validates new code.
+- When deployment is out of the deliverable's scope, the blocked browser check is `NOT_PERFORMED` (with reason) and its criterion is `UNVERIFIED` as pending deployment (with manual steps) — never a failure, never a pass.
+- Never weaken the sandbox or add dependencies to work around these restrictions.
+
+---
+
 ## Key Files
 
 | File | Purpose |

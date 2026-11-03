@@ -1,11 +1,12 @@
 import { useState } from 'react'
 
 import ChatView from './views/ChatView'
+import LearnView from './views/LearnView'
 
 const VIEWS = [
   { id: 'chat', label: 'Chat', blurb: '' },
   { id: 'capture', label: 'Capture', blurb: 'Capture view — coming in Phase 1.3 (notes, pastes, uploads).' },
-  { id: 'learn', label: 'Learn', blurb: 'Learn view — coming in Phase 2 (interactive eight-step explainer).' },
+  { id: 'learn', label: 'Learn', blurb: '' },
   { id: 'work', label: 'Work', blurb: 'Work view — coming in Phase 2 (extraction, accomplishments).' },
   { id: 'practice', label: 'Practice', blurb: 'Practice view — coming in Phase 3 (Learning-mode loop).' },
   { id: 'interview', label: 'Interview', blurb: 'Interview view — coming in Phase 3 (Interview-mode loop).' },
@@ -37,7 +38,9 @@ function App() {
           ))}
         </nav>
       </header>
-      <main className="mt-6">{view === 'chat' ? <ChatView /> : <p>{active.blurb}</p>}</main>
+      <main className="mt-6">
+        {view === 'chat' ? <ChatView /> : view === 'learn' ? <LearnView /> : <p>{active.blurb}</p>}
+      </main>
     </div>
   )
 }

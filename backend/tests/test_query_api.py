@@ -198,7 +198,7 @@ def test_invalid_mode_is_422(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert response.status_code == 422
 
 
-def test_context_explanation_id_accepted_ignored(
+def test_context_unknown_explanation_id_404s(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     client = _client(monkeypatch, tmp_path)
@@ -207,7 +207,8 @@ def test_context_explanation_id_accepted_ignored(
         "/api/v1/query",
         json={"question": "hi?", "context": {"explanation_id": "1" * 32}},
     )
-    assert response.status_code == 200
+    assert response.status_code == 404
+    assert response.json()["detail"] == "explanation not found"
 
 
 def test_auto_personal_routes_evidence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

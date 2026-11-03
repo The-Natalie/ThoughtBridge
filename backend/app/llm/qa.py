@@ -78,6 +78,7 @@ async def answer_question(
     search_fn: SearchFn,
     chat_fn: ChatFn,
     history: tuple[HistoryTurn, ...] = (),
+    extra_system: str | None = None,
 ) -> QaResult:
     """Answer one question with citations; see module contract."""
     hits = search_fn(question, top_k)
@@ -100,7 +101,10 @@ async def answer_question(
         )
     by_number = {p.n: p for p in passages}
 
-    raw = await chat_fn(build_messages(mode_used, question, passages, history))
+    messages = build_messages(mode_used, question, passages, history)
+    if extra_system:
+        messages.insert(1, {"role": "system", "content": extra_system})
+    raw = await chat_fn(messages)
     try:
         parsed = QaModelOut.model_validate_json(strip_fences(raw))
     except (ValueError, ValidationError) as exc:
