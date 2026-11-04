@@ -9,6 +9,7 @@ import {
   postRegenerate,
 } from '../api/learn'
 import { postQuery } from '../api/query'
+import LearnerProfilePanel from './LearnerProfilePanel'
 import type {
   ExplainRequest,
   ExplanationDetail,
@@ -271,6 +272,7 @@ function LearnView() {
 
       {!explanation ? (
         <div className="flex flex-col gap-2">
+          <LearnerProfilePanel />
           <input
             aria-label="Concept"
             value={conceptInput}

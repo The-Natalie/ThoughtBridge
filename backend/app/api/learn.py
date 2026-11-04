@@ -6,9 +6,10 @@ regenerates one step as a new version.
 
 Test seams: ``chat_completion``, ``get_explanation``, ``generate_explanation``,
 ``regenerate_step``, ``build_memory_context``, ``list_explanations``,
-``create_marker``, and ``list_markers`` are imported BY NAME so tests can
-``monkeypatch.setattr("app.api.learn.<name>", stub)`` (mirrors the
-query/ingest/retrieval router seams).
+``create_marker``, ``list_markers``, ``get_learner_profile``,
+``update_learner_profile``, and ``read_learner_context`` are imported BY NAME
+so tests can ``monkeypatch.setattr("app.api.learn.<name>", stub)`` (mirrors
+the query/ingest/retrieval router seams).
 """
 
 from __future__ import annotations
@@ -29,10 +30,15 @@ from app.db.explanations import (
     list_explanations,
     list_markers,
 )
+from app.db.learner_profile import (
+    EMPHASIS_KEYS,
+    get_learner_profile,
+    update_learner_profile,
+)
 from app.llm.explainer import (
     ExplainerValidationError,
-    default_learner_context,
     generate_explanation,
+    read_learner_context,
     regenerate_step,
 )
 from app.llm.memory import build_memory_context
@@ -105,6 +111,16 @@ class ExplanationSummaryOut(BaseModel):
     attempt_count: int
 
 
+class LearnerProfileOut(BaseModel):
+    emphasis: dict[str, bool]
+    how_i_learn: str
+
+
+class LearnerProfileUpdate(BaseModel):
+    emphasis: dict[str, bool] | None = None
+    how_i_learn: str | None = None
+
+
 def _make_chat_fn(settings, model_wanted: str):
     """Build the (messages, budget) chat closure over the Meta client."""
 
@@ -137,7 +153,7 @@ async def post_explain(body: ExplainRequest) -> ExplainResponse:
             hint=body.familiar_system_hint,
             db_path=db_path,
             chat_fn=_make_chat_fn(settings, model_wanted),
-            profile_fn=default_learner_context,
+            profile_fn=functools.partial(read_learner_context, db_path),
             memory_fn=functools.partial(build_memory_context, db_path),
         )
     except ExplainerValidationError as exc:
@@ -254,6 +270,40 @@ def list_markers_endpoint(explanation_id: str) -> list[MarkerOut]:
         )
         for m in list_markers(db_path, explanation_id)
     ]
+
+
+@router.get("/learn/profile", response_model=LearnerProfileOut)
+def get_learner_profile_endpoint() -> LearnerProfileOut:
+    """Fetch the learner-preferences profile (defaults when never saved)."""
+    profile = get_learner_profile(get_settings().database_path)
+    return LearnerProfileOut(emphasis=profile.emphasis, how_i_learn=profile.how_i_learn)
+
+
+@router.put("/learn/profile", response_model=LearnerProfileOut)
+def put_learner_profile(body: LearnerProfileUpdate) -> LearnerProfileOut:
+    """Merge-update the learner-preferences profile.
+
+    Both fields are optional; missing and explicit null are identical
+    (both merge-skipped), so `{}` is a valid no-op returning the current
+    profile. Unknown emphasis keys are rejected; value types are enforced
+    by Pydantic (non-bool/non-string → 422).
+    """
+    if body.emphasis is not None:
+        unknown = sorted(set(body.emphasis) - set(EMPHASIS_KEYS))
+        if unknown:
+            logger.warning("profile update rejected: unknown emphasis keys %s", unknown)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"invalid emphasis key(s) {unknown}: must be one of {', '.join(EMPHASIS_KEYS)}"
+                ),
+            )
+    profile = update_learner_profile(get_settings().database_path, body.emphasis, body.how_i_learn)
+    logger.info(
+        "profile updated via API: how_i_learn_chars=%d",
+        len(profile.how_i_learn),
+    )
+    return LearnerProfileOut(emphasis=profile.emphasis, how_i_learn=profile.how_i_learn)
 
 
 @router.post(

@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createMarker,
   getExplanation,
+  getLearnerProfile,
   listExplanations,
   listMarkers,
   postExplain,
   postRegenerate,
+  updateLearnerProfile,
 } from './learn'
 
 function mockFetch(payload: unknown, ok = true, status = 200, statusText = 'OK') {
@@ -90,5 +92,25 @@ describe('learn client', () => {
     expect(fetch.mock.calls[0][0]).toBe(
       'http://localhost:8000/api/v1/learn/explanations/exp-1/markers',
     )
+  })
+
+  it('getLearnerProfile GETs the profile path', async () => {
+    const fetch = mockFetch({ emphasis: {}, how_i_learn: '' })
+    vi.stubGlobal('fetch', fetch)
+    await getLearnerProfile()
+    expect(fetch.mock.calls[0][0]).toBe('http://localhost:8000/api/v1/learn/profile')
+  })
+
+  it('updateLearnerProfile PUTs the partial body to the profile path', async () => {
+    const fetch = mockFetch({ emphasis: {}, how_i_learn: '' })
+    vi.stubGlobal('fetch', fetch)
+    await updateLearnerProfile({ emphasis: { interactions: false }, how_i_learn: 'x' })
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('http://localhost:8000/api/v1/learn/profile')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      emphasis: { interactions: false },
+      how_i_learn: 'x',
+    })
   })
 })

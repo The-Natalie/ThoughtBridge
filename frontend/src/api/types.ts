@@ -131,3 +131,21 @@ export interface ExplanationSummary {
   marker_count: number
   attempt_count: number
 }
+
+export interface LearnerEmphasis {
+  familiar_systems: boolean
+  component_mapping: boolean
+  process_placement: boolean
+  interactions: boolean
+  terminology_bridge: boolean
+}
+
+export interface LearnerProfile {
+  emphasis: LearnerEmphasis
+  how_i_learn: string
+}
+
+export interface LearnerProfileUpdate {
+  emphasis?: Partial<LearnerEmphasis>
+  how_i_learn?: string
+}

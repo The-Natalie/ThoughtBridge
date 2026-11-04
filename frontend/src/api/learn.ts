@@ -1,9 +1,11 @@
-import { apiGet, apiPost } from './client'
+import { apiGet, apiPost, apiPut } from './client'
 import type {
   ExplainRequest,
   ExplainResponse,
   ExplanationDetail,
   ExplanationSummary,
+  LearnerProfile,
+  LearnerProfileUpdate,
   MarkerCreate,
   MarkerOut,
   RegenerateRequest,
@@ -46,4 +48,14 @@ export function createMarker(id: string, body: MarkerCreate): Promise<MarkerOut>
 /** List "clicked" markers for one explanation, chronological. */
 export function listMarkers(id: string): Promise<MarkerOut[]> {
   return apiGet<MarkerOut[]>(`/api/v1/learn/explanations/${id}/markers`)
+}
+
+/** Fetch the learner-preferences profile (defaults when never saved). */
+export function getLearnerProfile(): Promise<LearnerProfile> {
+  return apiGet<LearnerProfile>('/api/v1/learn/profile')
+}
+
+/** Merge-update the learner-preferences profile. */
+export function updateLearnerProfile(body: LearnerProfileUpdate): Promise<LearnerProfile> {
+  return apiPut<LearnerProfile>('/api/v1/learn/profile', body)
 }
