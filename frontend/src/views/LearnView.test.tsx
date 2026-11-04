@@ -548,4 +548,10 @@ describe('LearnView', () => {
     expect(screen.getByLabelText('Teach me')).toBeDefined()
     expect(screen.queryByLabelText('Lesson steps')).toBeNull()
   })
+
+  it('discloses that conversations are saved and retrievable', () => {
+    vi.stubGlobal('fetch', mockFetchSequence([]))
+    render(<LearnView />)
+    expect(screen.getByText('Conversations are saved and retrievable.')).toBeDefined()
+  })
 })

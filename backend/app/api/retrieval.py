@@ -4,6 +4,7 @@ Test seam: ``hybrid_search`` is imported BY NAME so tests can
 ``monkeypatch.setattr(\"app.api.retrieval.hybrid_search\", stub)`` (mirrors
 the ingest-router pipeline seam). The stub wraps the real search with a
 fake ``embed_fn``; the default suite never downloads the fastembed model.
+``get_chunk_source_types`` is likewise BY NAME for the same reason.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.db.chunks import get_chunks
+from app.db.chunks import get_chunk_source_types, get_chunks
 from app.db.connection import EmbeddingDimMismatchError
 from app.retrieval.search import TOP_K_DEFAULT, TOP_K_MAX, hybrid_search
 
@@ -33,6 +34,7 @@ class SearchHitOut(BaseModel):
     artifact_id: str
     span: list[int]
     excerpt: str
+    source_type: str
     rrf_score: float
     bm25_rank: int | None
     vector_rank: int | None
@@ -48,6 +50,7 @@ class ChunkOut(BaseModel):
     chunk_idx: int
     span: list[int]
     text: str
+    source_type: str
 
 
 @router.post("/retrieval/search", response_model=SearchResponse)
@@ -73,6 +76,7 @@ def search(body: SearchRequest) -> SearchResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
+    source_types = get_chunk_source_types(settings.database_path, [h.chunk_id for h in hits])
     return SearchResponse(
         results=[
             SearchHitOut(
@@ -80,6 +84,7 @@ def search(body: SearchRequest) -> SearchResponse:
                 artifact_id=h.artifact_id,
                 span=[h.span_start, h.span_end],
                 excerpt=h.excerpt,
+                source_type=source_types[h.chunk_id],
                 rrf_score=h.rrf_score,
                 bm25_rank=h.bm25_rank,
                 vector_rank=h.vector_rank,
@@ -95,10 +100,12 @@ def get_chunk_endpoint(chunk_id: int) -> ChunkOut:
     detail = get_chunks(get_settings().database_path, [chunk_id]).get(chunk_id)
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="chunk not found")
+    source_type = get_chunk_source_types(get_settings().database_path, [chunk_id])[chunk_id]
     return ChunkOut(
         id=detail.id,
         artifact_id=detail.artifact_id,
         chunk_idx=detail.chunk_idx,
         span=[detail.span_start, detail.span_end],
         text=detail.text,
+        source_type=source_type,
     )

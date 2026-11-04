@@ -17,6 +17,9 @@ from pypdf import PdfReader
 TEXT_SOURCE_TYPES = frozenset({"note", "paste", "summary"})
 ALLOWED_UPLOAD_SUFFIXES = {".txt", ".md", ".pdf", ".docx"}
 UPLOAD_SOURCE_TYPE = "file"
+TB_CONVERSATION_SOURCE_TYPE = "tb_conversation"
+ROLE_TAGS = {"user": "User:", "assistant": "Assistant:"}
+CONVERSATION_TITLE_CHARS = 60
 
 
 class UnsupportedSuffixError(ValueError):
@@ -58,6 +61,41 @@ def adapt_text(source_type: str, title: str, content: str) -> AdaptedSource:
         title=title.strip(),
         content=content,
         origin={"adapter": "text"},
+    )
+
+
+def adapt_conversation(
+    conversation_id: str,
+    kind: str,
+    turns: list[tuple[str, str]],
+    turn_start: int,
+) -> AdaptedSource:
+    """Normalize one turn-append as a role-tagged ``tb_conversation`` source.
+
+    Each turn is ``(role, content)`` with role in ``{"user", "assistant"}``.
+    Contents are used verbatim (no strip — spans must match the stored
+    artifact exactly; the chunker strips per-chunk). Empty ``turns`` or an
+    unknown role raises ValueError.
+    """
+    if not turns:
+        raise ValueError("conversation append holds no turns")
+    for role, _ in turns:
+        if role not in ROLE_TAGS:
+            raise ValueError(f"unknown turn role: {role!r}")
+    content = "\n\n".join(f"{ROLE_TAGS[role]} {text}" for role, text in turns)
+    first_user = next((text for role, text in turns if role == "user"), None)
+    title = first_user[:CONVERSATION_TITLE_CHARS] if first_user else f"{kind} conversation"
+    return AdaptedSource(
+        source_type=TB_CONVERSATION_SOURCE_TYPE,
+        title=title,
+        content=content,
+        origin={
+            "adapter": "tb_conversation",
+            "conversation_id": conversation_id,
+            "kind": kind,
+            "turn_start": str(turn_start),
+            "turn_end": str(turn_start + len(turns) - 1),
+        },
     )
 
 

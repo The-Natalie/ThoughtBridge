@@ -98,6 +98,9 @@ function ChatView() {
                       className="rounded border px-2 py-0.5 text-xs underline"
                     >
                       [{c.chunk_id}] {c.excerpt.slice(0, 40)}
+                      {c.source_type === 'tb_conversation' && (
+                        <span aria-label="Conversation source"> (from a ThoughtBridge conversation)</span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -123,6 +126,11 @@ function ChatView() {
               Close
             </button>
           </div>
+          {activeCitation.source_type === 'tb_conversation' && (
+            <p aria-label="Conversation source" className="text-xs italic">
+              from a ThoughtBridge conversation
+            </p>
+          )}
           <p className="mt-1 text-sm">{activeCitation.text}</p>
         </div>
       )}

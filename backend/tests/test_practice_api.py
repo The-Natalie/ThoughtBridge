@@ -23,6 +23,7 @@ from app.db.conversations import create_conversation, get_conversation
 from app.db.explanations import create_explanation
 from app.db.facts import FactCreate, create_facts
 from app.ingest.chunker import chunk_text
+from app.ingest.pipeline import IngestResult
 from app.llm.extraction import no_career
 from app.main import create_app
 
@@ -55,12 +56,29 @@ def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
 
 
-def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
+@pytest.fixture(autouse=True)
+def _no_conversation_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the conversation-index seam to a no-op (never embeds).
+
+    Hook tests re-stub this symbol with recording stubs; every other test
+    posts questions/answers without indexing side effects.
+    """
+    monkeypatch.setattr(
+        "app.api.practice.index_conversation_turns",
+        lambda **kwargs: IngestResult(artifact_id="stub-artifact", chunk_count=0),
+    )
+
+
+def _client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    raise_server_exceptions: bool = True,
+) -> TestClient:
     db = str(tmp_path / "practice_api.db")
     init_db(db)
     monkeypatch.setenv("DATABASE_PATH", db)
     monkeypatch.setenv("MODEL_API_KEY", "test-key")
-    return TestClient(create_app())
+    return TestClient(create_app(), raise_server_exceptions=raise_server_exceptions)
 
 
 def _db_of(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
@@ -568,3 +586,176 @@ def test_attempts_malformed_feedback_serves_null(
     assert rows[garbage]["feedback"] is None
     assert rows[partial]["feedback"] is None
     assert rows[garbage]["answer"] == "a"
+
+
+def _record_index(monkeypatch: pytest.MonkeyPatch) -> list:
+    calls: list = []
+
+    def fake(**kwargs: Any) -> IngestResult:
+        calls.append(kwargs)
+        return IngestResult(artifact_id="rec-artifact", chunk_count=1)
+
+    monkeypatch.setattr("app.api.practice.index_conversation_turns", fake)
+    return calls
+
+
+def test_question_indexes_with_mode_kind_and_turn_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    db = _db_of(monkeypatch, tmp_path)
+    exp_id = _seed_explanation(db)
+    _stubs(monkeypatch, [QUESTION_JSON, QUESTION_JSON])
+    calls = _record_index(monkeypatch)
+    first = client.post(
+        "/api/v1/practice/question",
+        json={"mode": "learning", "context": {"explanation_id": exp_id}},
+    ).json()
+    client.post(
+        "/api/v1/practice/question",
+        json={
+            "mode": "learning",
+            "context": {"explanation_id": exp_id},
+            "conversation_id": first["conversation_id"],
+        },
+    )
+    assert [c["turn_start"] for c in calls] == [0, 2]
+    assert all(c["kind"] == "learning" for c in calls)
+    assert all(c["conversation_id"] == first["conversation_id"] for c in calls)
+    assert [r for r, _ in calls[0]["turns"]] == ["user", "assistant"]
+    assert calls[0]["turns"][1][1] == first["question"]
+
+
+def test_question_interview_indexes_interview_kind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    db = _db_of(monkeypatch, tmp_path)
+    _seed_fact(db)
+    _stubs(monkeypatch, [QUESTION_JSON])
+    calls = _record_index(monkeypatch)
+    body = client.post(
+        "/api/v1/practice/question",
+        json={"mode": "interview", "question_kind": "experience", "context": {}},
+    ).json()
+    assert len(calls) == 1
+    assert calls[0]["kind"] == "interview"
+    assert calls[0]["conversation_id"] == body["conversation_id"]
+    assert calls[0]["turn_start"] == 0
+
+
+def test_answer_indexes_in_attempt_conversation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.db.conversations import get_conversation as read_conversation
+
+    client = _client(monkeypatch, tmp_path)
+    db = _db_of(monkeypatch, tmp_path)
+    exp_id = _seed_explanation(db)
+    _stubs(monkeypatch, [QUESTION_JSON, FEEDBACK_JSON])
+    calls = _record_index(monkeypatch)
+    asked = client.post(
+        "/api/v1/practice/question",
+        json={"mode": "learning", "context": {"explanation_id": exp_id}},
+    ).json()
+    pre = read_conversation(db, asked["conversation_id"])
+    assert pre is not None
+    pre_count = len(pre.turns)
+    response = client.post(
+        "/api/v1/practice/answer",
+        json={"attempt_id": asked["attempt_id"], "answer": "RAG fetches passages first."},
+    )
+    assert response.status_code == 200
+    assert len(calls) == 2
+    assert calls[1]["conversation_id"] == asked["conversation_id"]
+    assert calls[1]["turn_start"] == pre_count
+    assert calls[1]["turns"][0] == ("user", "RAG fetches passages first.")
+
+
+def test_answer_null_conversation_indexes_fresh_at_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.db.attempts import get_attempt
+    from app.db.conversations import list_conversations
+
+    client = _client(monkeypatch, tmp_path)
+    db = _db_of(monkeypatch, tmp_path)
+    exp_id = _seed_explanation(db)
+    _stubs(monkeypatch, [FEEDBACK_JSON])
+    calls = _record_index(monkeypatch)
+    attempt_id = create_attempt(
+        db,
+        mode="learning",
+        question_kind=None,
+        explanation_id=exp_id,
+        question="Q?",
+        conversation_id=None,  # type: ignore[arg-type]
+        reference_json={},
+    )
+    response = client.post(
+        "/api/v1/practice/answer", json={"attempt_id": attempt_id, "answer": "my answer"}
+    )
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["turn_start"] == 0
+    assert calls[0]["kind"] == "learning"
+    convos = list_conversations(db)
+    assert len(convos) == 1
+    assert calls[0]["conversation_id"] == convos[0].id
+    assert get_attempt(db, attempt_id) is not None
+
+
+def test_answer_deleted_conversation_recovers_fresh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.db.conversations import delete_conversation_cascade
+    from app.db.conversations import get_conversation as read_conv
+
+    client = _client(monkeypatch, tmp_path)
+    db = _db_of(monkeypatch, tmp_path)
+    exp_id = _seed_explanation(db)
+    _stubs(monkeypatch, [QUESTION_JSON, FEEDBACK_JSON])
+    calls = _record_index(monkeypatch)
+    asked = client.post(
+        "/api/v1/practice/question",
+        json={"mode": "learning", "context": {"explanation_id": exp_id}},
+    ).json()
+    assert delete_conversation_cascade(db, asked["conversation_id"]) is not None
+    response = client.post(
+        "/api/v1/practice/answer", json={"attempt_id": asked["attempt_id"], "answer": "a"}
+    )
+    assert response.status_code == 200
+    assert len(calls) == 2
+    assert calls[1]["turn_start"] == 0
+    assert calls[1]["conversation_id"] != asked["conversation_id"]
+    fresh = read_conv(db, calls[1]["conversation_id"])
+    assert fresh is not None
+    assert [t.idx for t in fresh.turns] == [0, 1]
+
+
+def test_answer_index_failure_500_with_attempt_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.db.attempts import get_attempt
+
+    client = _client(monkeypatch, tmp_path, raise_server_exceptions=False)
+    db = _db_of(monkeypatch, tmp_path)
+    exp_id = _seed_explanation(db)
+    _stubs(monkeypatch, [QUESTION_JSON, FEEDBACK_JSON])
+    asked = client.post(
+        "/api/v1/practice/question",
+        json={"mode": "learning", "context": {"explanation_id": exp_id}},
+    ).json()
+
+    def boom(**kwargs: Any) -> IngestResult:
+        raise RuntimeError("embed boom")
+
+    monkeypatch.setattr("app.api.practice.index_conversation_turns", boom)
+    response = client.post(
+        "/api/v1/practice/answer", json={"attempt_id": asked["attempt_id"], "answer": "a"}
+    )
+    assert response.status_code == 500
+    attempt = get_attempt(db, asked["attempt_id"])
+    assert attempt is not None
+    assert attempt.answer == "a"
+    assert attempt.feedback is not None

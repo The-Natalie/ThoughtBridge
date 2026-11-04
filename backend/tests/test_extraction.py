@@ -188,7 +188,7 @@ def test_persist_receives_model_and_prompt_version(tmp_path: Path) -> None:
         persist_fn=persist,
     )
     assert captured == {"model": "model-xyz", "prompt_version": EXTRACTION_PROMPT_VERSION}
-    assert EXTRACTION_PROMPT_VERSION == "extract-v1"
+    assert EXTRACTION_PROMPT_VERSION == "extract-v2"
 
 
 def test_malformed_json_raises_and_skips_persist(tmp_path: Path) -> None:

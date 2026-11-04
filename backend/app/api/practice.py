@@ -10,9 +10,9 @@ Test seams: ``generate_question``, ``evaluate_answer``, ``chat_completion``,
 ``hybrid_search``, ``read_career_context``, ``get_explanation``,
 ``create_attempt``, ``record_answer``, ``get_attempt``, ``list_attempts``,
 ``get_conversation``, ``create_conversation_with_turns``, ``append_turns``,
-and ``get_settings`` are imported BY NAME so tests can
-``monkeypatch.setattr("app.api.practice.<name>", stub)`` (mirrors the
-learn/query/work router seams).
+``get_settings``, and ``index_conversation_turns`` are imported BY NAME so
+tests can ``monkeypatch.setattr("app.api.practice.<name>", stub)``
+(mirrors the learn/query/work router seams).
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from app.db.attempts import AttemptDetail, create_attempt, get_attempt, list_att
 from app.db.connection import EmbeddingDimMismatchError
 from app.db.conversations import append_turns, create_conversation_with_turns, get_conversation
 from app.db.explanations import get_explanation
+from app.ingest.conversation_memory import index_conversation_turns
 from app.llm.extraction import read_career_context
 from app.llm.practice import (
     NoEvidenceError,
@@ -231,6 +232,16 @@ async def post_question(body: QuestionRequest) -> QuestionResponse:
         conversation_id=conversation_id,
         reference_json=result.reference_json,
     )
+    index_conversation_turns(
+        db_path=db_path,
+        conversation_id=conversation_id,
+        kind="learning" if body.mode == "learning" else "interview",
+        turns=[(t[0], t[1]) for t in turns],
+        turn_start=0 if existing is None else len(existing.turns),
+        max_artifact_chars=settings.max_artifact_chars,
+        embedding_model=embedding_model,
+        embed_fn=None,
+    )
     logger.info(
         "practice question served: mode=%s kind=%s attempt=%s conversation=%s",
         body.mode,
@@ -301,13 +312,31 @@ async def post_answer(body: AnswerRequest) -> AnswerResponse:
         ("user", body.answer, mode_label, "[]"),
         ("assistant", render_feedback_text(result.feedback), mode_label, "[]"),
     ]
-    if attempt.conversation_id is None:
-        # Defensive: the question's conversation is gone (possible once
-        # conversation deletion lands) — persist into a fresh conversation.
-        kind = "learning" if attempt.mode == "learning" else "interview"
-        create_conversation_with_turns(db_path, kind, turns)
+    kind = "learning" if attempt.mode == "learning" else "interview"
+    existing = (
+        get_conversation(db_path, attempt.conversation_id)
+        if attempt.conversation_id is not None
+        else None
+    )
+    if existing is None:
+        # Fresh conversation: the attempt never had one, or its conversation
+        # was deleted — persist + index at turn 0.
+        conversation_id, _ = create_conversation_with_turns(db_path, kind, turns)
+        turn_start = 0
     else:
-        append_turns(db_path, attempt.conversation_id, turns)
+        append_turns(db_path, existing.id, turns)
+        conversation_id = existing.id
+        turn_start = len(existing.turns)
+    index_conversation_turns(
+        db_path=db_path,
+        conversation_id=conversation_id,
+        kind=kind,
+        turns=[(t[0], t[1]) for t in turns],
+        turn_start=turn_start,
+        max_artifact_chars=settings.max_artifact_chars,
+        embedding_model=settings.embedding_model,
+        embed_fn=None,
+    )
     logger.info("practice answer served: attempt=%s grounding=%s", attempt.id, result.grounding)
     return AnswerResponse(
         feedback=FeedbackOut.model_validate(result.feedback), grounding=result.grounding

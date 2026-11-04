@@ -574,6 +574,8 @@ function LearnView() {
       )}
 
       <p className="text-xs">Lessons are saved and reusable.</p>
+
+      <p className="text-xs">Conversations are saved and retrievable.</p>
     </div>
   )
 }

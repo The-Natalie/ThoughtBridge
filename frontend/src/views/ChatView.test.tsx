@@ -8,8 +8,8 @@ function queryResponse(overrides: Partial<QueryResponse> = {}): QueryResponse {
   return {
     answer: 'The pipeline uses Modal.',
     citations: [
-      { chunk_id: 1, artifact_id: 'a1', span: [0, 24], excerpt: 'The pipeline uses Modal.' },
-      { chunk_id: 2, artifact_id: 'a1', span: [25, 50], excerpt: 'Volume persists the file.' },
+      { chunk_id: 1, artifact_id: 'a1', span: [0, 24], excerpt: 'The pipeline uses Modal.', source_type: 'note' },
+      { chunk_id: 2, artifact_id: 'a1', span: [25, 50], excerpt: 'Volume persists the file.', source_type: 'note' },
     ],
     mode_used: 'evidence',
     conversation_id: 'conv-1',
@@ -78,7 +78,7 @@ describe('ChatView', () => {
   it('opens the citation panel with full chunk text on chip click', async () => {
     const fetch = mockFetchSequence([
       queryResponse(),
-      { id: 1, artifact_id: 'a1', chunk_idx: 0, span: [0, 24], text: 'FULL chunk body text' },
+      { id: 1, artifact_id: 'a1', chunk_idx: 0, span: [0, 24], text: 'FULL chunk body text', source_type: 'note' },
     ])
     vi.stubGlobal('fetch', fetch)
     render(<ChatView />)
@@ -129,5 +129,55 @@ describe('ChatView', () => {
     fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'q?' } })
     fireEvent.click(screen.getByLabelText('Send'))
     expect(await screen.findByText('general explanation + your notes')).toBeDefined()
+  })
+
+  it('shows no conversation badge for note citations', async () => {
+    vi.stubGlobal('fetch', mockFetchSequence([queryResponse()]))
+    render(<ChatView />)
+    fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'Where?' } })
+    fireEvent.click(screen.getByLabelText('Send'))
+    await screen.findByText('The pipeline uses Modal.')
+    expect(screen.queryByLabelText('Conversation source')).toBeNull()
+  })
+
+  it('badges conversation citations on the chip', async () => {
+    const resp = queryResponse({
+      citations: [
+        { chunk_id: 9, artifact_id: 'conv-art', span: [0, 30], excerpt: 'User: we decided quokka', source_type: 'tb_conversation' },
+      ],
+    })
+    vi.stubGlobal('fetch', mockFetchSequence([resp]))
+    render(<ChatView />)
+    fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'What?' } })
+    fireEvent.click(screen.getByLabelText('Send'))
+    await screen.findByText('The pipeline uses Modal.')
+    expect(screen.getByLabelText('Conversation source')).toBeDefined()
+    expect(screen.getByLabelText('Conversation source').textContent).toContain(
+      'from a ThoughtBridge conversation',
+    )
+  })
+
+  it('badges the citation panel for conversation chunks', async () => {
+    const resp = queryResponse({
+      citations: [
+        { chunk_id: 9, artifact_id: 'conv-art', span: [0, 30], excerpt: 'User: we decided quokka', source_type: 'tb_conversation' },
+      ],
+    })
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence([
+        resp,
+        { id: 9, artifact_id: 'conv-art', chunk_idx: 0, span: [0, 30], text: 'User: we decided quokka', source_type: 'tb_conversation' },
+      ]),
+    )
+    render(<ChatView />)
+    fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'What?' } })
+    fireEvent.click(screen.getByLabelText('Send'))
+    await screen.findByText('The pipeline uses Modal.')
+    fireEvent.click(screen.getByLabelText('Citation 9'))
+    expect(await screen.findByText('User: we decided quokka')).toBeDefined()
+    const badges = screen.getAllByLabelText('Conversation source')
+    expect(badges.length).toBe(2)
+    expect(badges[1].textContent).toBe('from a ThoughtBridge conversation')
   })
 })

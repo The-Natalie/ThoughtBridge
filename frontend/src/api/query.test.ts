@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { getChunk, getConversation, listConversations, postQuery } from './query'
+import { deleteConversation, getChunk, getConversation, listConversations, postQuery } from './query'
 
 function mockFetch(payload: unknown, ok = true, status = 200, statusText = 'OK') {
   return vi.fn().mockResolvedValue({
@@ -44,9 +44,25 @@ describe('query client', () => {
     expect(fetch.mock.calls[1][0]).toBe('http://localhost:8000/api/v1/conversations/abc')
   })
 
+  it('deleteConversation DELETEs the conversation path', async () => {
+    const payload = { deleted: { conversations: 1 }, unlinked: { facts: 0 } }
+    const fetch = mockFetch(payload)
+    vi.stubGlobal('fetch', fetch)
+    await expect(deleteConversation('abc')).resolves.toEqual(payload)
+    expect(fetch).toHaveBeenCalledOnce()
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('http://localhost:8000/api/v1/conversations/abc')
+    expect(init.method).toBe('DELETE')
+  })
+
   it('rejects with status detail on non-OK responses', async () => {
     vi.stubGlobal('fetch', mockFetch({ detail: 'x' }, false, 502, 'Bad Gateway'))
     await expect(postQuery({ question: 'hi?' })).rejects.toThrow('API request failed: 502 Bad Gateway')
+  })
+
+  it('deleteConversation rejects on non-OK responses', async () => {
+    vi.stubGlobal('fetch', mockFetch({ detail: 'x' }, false, 404, 'Not Found'))
+    await expect(deleteConversation('abc')).rejects.toThrow('API request failed: 404 Not Found')
   })
 
   it('honors VITE_API_URL', async () => {

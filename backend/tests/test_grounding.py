@@ -7,17 +7,23 @@ assertions only; prompt prose stays tunable.
 import pytest
 
 from app.core.grounding import (
+    CONVERSATION_ROLE_RULE,
     EVALUATION_JSON_INSTRUCTIONS,
+    EVALUATION_SYSTEM_PROMPTS,
     EVIDENCE_SYSTEM_PROMPT,
+    EXTRACTION_PROMPT_VERSION,
+    EXTRACTION_SYSTEM_PROMPT,
     MAX_HISTORY_CHARS,
     MAX_HISTORY_TURNS,
     QA_JSON_INSTRUCTIONS,
     QUESTION_JSON_INSTRUCTIONS,
+    QUESTION_SYSTEM_PROMPTS,
     REFUSAL_ANSWER,
     TEACHING_SYSTEM_PROMPT,
     HistoryTurn,
     NumberedPassage,
     build_evaluation_messages,
+    build_extraction_messages,
     build_messages,
     build_practice_request_turn,
     build_question_messages,
@@ -27,6 +33,7 @@ from app.core.grounding import (
     route_auto,
     select_history,
 )
+from app.ingest.adapters import ROLE_TAGS
 
 
 @pytest.mark.parametrize(
@@ -238,3 +245,50 @@ def test_render_feedback_text_odd_shapes_never_raise() -> None:
     assert "(none)" in render_feedback_text({})
     assert "(none)" in render_feedback_text({"correct": "not-a-list", "next_step": None})
     assert "42" in render_feedback_text({"correct": [42], "next_step": 42})
+
+
+def test_conversation_role_rule_matches_adapter_tags() -> None:
+    assert ROLE_TAGS["user"] in CONVERSATION_ROLE_RULE
+    assert ROLE_TAGS["assistant"] in CONVERSATION_ROLE_RULE
+
+
+def test_conversation_role_rule_governs_three_prompts() -> None:
+    assert CONVERSATION_ROLE_RULE in EXTRACTION_SYSTEM_PROMPT
+    assert CONVERSATION_ROLE_RULE in EVIDENCE_SYSTEM_PROMPT
+    assert CONVERSATION_ROLE_RULE in EVALUATION_SYSTEM_PROMPTS[("interview", "experience")]
+    assert EXTRACTION_PROMPT_VERSION == "extract-v2"
+
+
+def test_conversation_role_rule_excluded_elsewhere() -> None:
+    assert CONVERSATION_ROLE_RULE not in TEACHING_SYSTEM_PROMPT
+    assert CONVERSATION_ROLE_RULE not in EVALUATION_SYSTEM_PROMPTS[("learning", None)]
+    assert CONVERSATION_ROLE_RULE not in EVALUATION_SYSTEM_PROMPTS[("interview", "technical")]
+    for prompt in QUESTION_SYSTEM_PROMPTS.values():
+        assert CONVERSATION_ROLE_RULE not in prompt
+
+
+def test_extraction_messages_render_role_tags_verbatim() -> None:
+    tagged = "User: I shipped the fix.\n\nAssistant: Nice work."
+    messages = build_extraction_messages(
+        [NumberedPassage(n=1, chunk_id=7, artifact_id="a", text=tagged)], ""
+    )
+    assert tagged in messages[-1]["content"]
+
+
+def test_qa_messages_carry_rule_only_in_evidence_mode() -> None:
+    passage = NumberedPassage(n=1, chunk_id=7, artifact_id="a", text="User: notes")
+    evidence = build_messages(mode_used="evidence", question="q?", passages=[passage])
+    assert CONVERSATION_ROLE_RULE in evidence[0]["content"]
+    teaching = build_messages(mode_used="teaching", question="q?", passages=[passage])
+    assert CONVERSATION_ROLE_RULE not in teaching[0]["content"]
+
+
+def test_experience_evaluation_messages_carry_rule() -> None:
+    experienced = build_evaluation_messages(
+        mode="interview", kind="experience", reference_block="REF", answer="a"
+    )
+    assert CONVERSATION_ROLE_RULE in experienced[0]["content"]
+    learning = build_evaluation_messages(
+        mode="learning", kind=None, reference_block="REF", answer="a"
+    )
+    assert CONVERSATION_ROLE_RULE not in learning[0]["content"]

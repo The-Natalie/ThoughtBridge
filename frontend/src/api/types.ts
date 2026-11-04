@@ -8,6 +8,7 @@ export interface Citation {
   artifact_id: string
   span: [number, number]
   excerpt: string
+  source_type: string
 }
 
 export interface QueryRequest {
@@ -31,6 +32,7 @@ export interface ChunkDetail {
   chunk_idx: number
   span: [number, number]
   text: string
+  source_type: string
 }
 
 export interface Turn {
@@ -55,6 +57,11 @@ export interface ConversationSummary {
   kind: string
   created_at: string
   turn_count: number
+}
+
+export interface ConversationDeleteResponse {
+  deleted: Record<string, number>
+  unlinked: Record<string, number>
 }
 
 export interface ExplainRequest {

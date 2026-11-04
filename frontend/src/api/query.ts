@@ -1,6 +1,7 @@
-import { apiGet, apiPost } from './client'
+import { apiDelete, apiGet, apiPost } from './client'
 import type {
   ChunkDetail,
+  ConversationDeleteResponse,
   ConversationDetail,
   ConversationSummary,
   QueryRequest,
@@ -25,4 +26,9 @@ export function listConversations(): Promise<ConversationSummary[]> {
 /** Fetch one conversation with its turns. */
 export function getConversation(id: string): Promise<ConversationDetail> {
   return apiGet<ConversationDetail>(`/api/v1/conversations/${id}`)
+}
+
+/** Delete one conversation with full derived cascade. */
+export function deleteConversation(id: string): Promise<ConversationDeleteResponse> {
+  return apiDelete<ConversationDeleteResponse>(`/api/v1/conversations/${id}`)
 }

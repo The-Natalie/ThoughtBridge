@@ -59,6 +59,7 @@ function chunkDetail(overrides: Partial<ChunkDetail> = {}): ChunkDetail {
     chunk_idx: 0,
     span: [0, 10],
     text: 'full chunk text here',
+    source_type: 'note',
     ...overrides,
   }
 }
@@ -305,5 +306,11 @@ describe('WorkView', () => {
     render(<WorkView />)
     expect(await screen.findByRole('alert')).toBeDefined()
     expect(screen.getByText('acc down')).toBeDefined()
+  })
+
+  it('discloses that conversations are saved and retrievable', () => {
+    vi.stubGlobal('fetch', mockFetchSequence([[artifactSummary()], []]))
+    render(<WorkView />)
+    expect(screen.getByText('Conversations are saved and retrievable.')).toBeDefined()
   })
 })

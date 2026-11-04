@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import struct
 import uuid
 from dataclasses import dataclass, field
@@ -141,6 +142,109 @@ def find_missing_artifact_ids(db_path: str, artifact_ids: list[str]) -> list[str
         if aid not in present and aid not in missing:
             missing.append(aid)
     return missing
+
+
+def find_conversation_artifacts(db_path: str, conversation_id: str) -> list[str]:
+    """Artifact ids indexed from one conversation, oldest first.
+
+    Filters the free-form ``origin`` JSON in SQL (no migration needed).
+    ``json_extract`` on a malformed ``origin`` yields NULL, which simply
+    does not match — never raises.
+    """
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id FROM artifacts"
+            " WHERE json_extract(origin, '$.adapter') = 'tb_conversation'"
+            " AND json_extract(origin, '$.conversation_id') = ?"
+            " ORDER BY created_at, id",
+            (conversation_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r["id"] for r in rows]
+
+
+def _delete_artifacts_cascade_conn(
+    conn: sqlite3.Connection, artifact_ids: list[str]
+) -> dict[str, int]:
+    """Delete artifacts + derived rows left with no support, shared cascade core.
+
+    Runs on the CALLER's open connection (no commit — the caller owns the
+    transaction). Chunk rows cascade via FK (FTS rows follow through the
+    schema's sync triggers — this function never touches ``chunks_fts``
+    directly); vec rows are deleted explicitly (vec0 has no FK);
+    ``fact_chunks`` rows cascade via FK and facts left with zero supporting
+    chunks are deleted; ``fact_links`` and artifact-linked
+    ``interpretations`` cascade via FK. Returns deletion counts.
+    """
+    zero = {"artifacts": 0, "chunks": 0, "facts": 0, "unlinked_facts": 0}
+    ordered = list(dict.fromkeys(artifact_ids))
+    if not ordered:
+        return zero
+    placeholders = ",".join("?" * len(ordered))
+    chunk_ids = [
+        r["id"]
+        for r in conn.execute(
+            f"SELECT id FROM chunks WHERE artifact_id IN ({placeholders})",
+            tuple(ordered),
+        ).fetchall()
+    ]
+    affected: set[str] = set()
+    if chunk_ids:
+        chunk_placeholders = ",".join("?" * len(chunk_ids))
+        affected = {
+            r["fact_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT fact_id FROM fact_chunks"
+                f" WHERE chunk_id IN ({chunk_placeholders})",
+                tuple(chunk_ids),
+            ).fetchall()
+        }
+        conn.execute(
+            f"DELETE FROM chunks_vec WHERE rowid IN ({chunk_placeholders})",
+            tuple(chunk_ids),
+        )
+    artifacts_deleted = conn.execute(
+        f"DELETE FROM artifacts WHERE id IN ({placeholders})", tuple(ordered)
+    ).rowcount
+    facts_deleted = 0
+    if affected:
+        affected_placeholders = ",".join("?" * len(affected))
+        facts_deleted = conn.execute(
+            "DELETE FROM facts WHERE id IN"
+            f" ({affected_placeholders}) AND NOT EXISTS (SELECT 1 FROM fact_chunks"
+            " WHERE fact_chunks.fact_id = facts.id)",
+            tuple(affected),
+        ).rowcount
+    return {
+        "artifacts": artifacts_deleted,
+        # Chunks go via the enforced FK cascade, so every collected id is gone.
+        "chunks": len(chunk_ids),
+        "facts": facts_deleted,
+        "unlinked_facts": len(affected) - facts_deleted,
+    }
+
+
+def delete_artifacts_cascade(db_path: str, artifact_ids: list[str]) -> dict[str, int]:
+    """Delete artifacts with full derived cascade in ONE transaction.
+
+    Deliverable 4's DELETE /artifacts/{id} calls this verbatim.
+    """
+    conn = connect(db_path)
+    try:
+        with conn:
+            counts = _delete_artifacts_cascade_conn(conn, artifact_ids)
+    finally:
+        conn.close()
+    logger.info(
+        "deleted artifacts cascade: artifacts=%d chunks=%d facts=%d unlinked_facts=%d",
+        counts["artifacts"],
+        counts["chunks"],
+        counts["facts"],
+        counts["unlinked_facts"],
+    )
+    return counts
 
 
 def get_artifact_detail(db_path: str, artifact_id: str) -> ArtifactDetail | None:

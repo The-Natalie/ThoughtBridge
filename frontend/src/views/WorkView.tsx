@@ -301,6 +301,8 @@ function WorkView() {
           <p className="mt-1 text-sm">{activeCitation.text}</p>
         </div>
       )}
+
+      <p className="text-xs">Conversations are saved and retrievable.</p>
     </div>
   )
 }

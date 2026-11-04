@@ -5,9 +5,12 @@ import json
 import pytest
 
 from app.ingest.adapters import (
+    ROLE_TAGS,
+    TB_CONVERSATION_SOURCE_TYPE,
     UndecodableUploadError,
     UnparseableUploadError,
     UnsupportedSuffixError,
+    adapt_conversation,
     adapt_text,
     adapt_upload,
 )
@@ -138,3 +141,47 @@ def test_blank_page_pdf_adapts_with_empty_content() -> None:
     adapted = adapt_upload("blank.pdf", "application/pdf", blank_pdf_bytes())
     assert adapted.content == ""
     assert adapted.origin["pages"] == "1"
+
+
+def test_conversation_two_turns_tagged_transcript() -> None:
+    adapted = adapt_conversation(
+        "cid-1", "qa", [("user", "what did we decide?"), ("assistant", "Redis.")], 4
+    )
+    assert adapted.source_type == TB_CONVERSATION_SOURCE_TYPE
+    assert adapted.source_type == "tb_conversation"
+    assert adapted.content == "User: what did we decide?\n\nAssistant: Redis."
+    assert adapted.title == "what did we decide?"
+    assert adapted.origin == {
+        "adapter": "tb_conversation",
+        "conversation_id": "cid-1",
+        "kind": "qa",
+        "turn_start": "4",
+        "turn_end": "5",
+    }
+    assert json.loads(json.dumps(adapted.origin)) == adapted.origin
+
+
+def test_conversation_title_slices_first_user_turn() -> None:
+    long_q = "decide the session cache backend: " + "x" * 100
+    adapted = adapt_conversation("cid-2", "interview", [("user", long_q)], 0)
+    assert adapted.title == long_q[:60]
+    assert len(adapted.title) == 60
+
+
+def test_conversation_title_falls_back_without_user_turn() -> None:
+    adapted = adapt_conversation("cid-3", "learning", [("assistant", "welcome")], 0)
+    assert adapted.title == "learning conversation"
+
+
+def test_conversation_content_uses_tags_verbatim() -> None:
+    adapted = adapt_conversation("c", "qa", [("user", "  spaced  ")], 7)
+    assert adapted.content == f"{ROLE_TAGS['user']}   spaced  "
+    assert adapted.origin["turn_start"] == "7"
+    assert adapted.origin["turn_end"] == "7"
+
+
+def test_conversation_unknown_role_and_empty_turns_raise() -> None:
+    with pytest.raises(ValueError, match="unknown turn role"):
+        adapt_conversation("c", "qa", [("system", "hi")], 0)
+    with pytest.raises(ValueError, match="no turns"):
+        adapt_conversation("c", "qa", [], 0)

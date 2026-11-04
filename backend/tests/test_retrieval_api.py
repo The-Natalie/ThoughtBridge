@@ -111,6 +111,7 @@ def test_search_returns_200_with_exact_hit_keys(
         "artifact_id",
         "span",
         "excerpt",
+        "source_type",
         "rrf_score",
         "bm25_rank",
         "vector_rank",
@@ -182,7 +183,7 @@ def test_get_chunk_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     response = client.get(f"/api/v1/chunks/{cid}")
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"id", "artifact_id", "chunk_idx", "span", "text"}
+    assert set(body.keys()) == {"id", "artifact_id", "chunk_idx", "span", "text", "source_type"}
     assert body["id"] == cid
     assert body["text"] == content
     assert body["span"] == [0, len(content)]
@@ -219,3 +220,44 @@ def test_dim_mismatch_search_is_500(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     response = client.post("/api/v1/retrieval/search", json={"query": "alpha"})
     assert response.status_code == 500
     assert "dim=" in response.json()["detail"]
+
+
+def test_search_hits_carry_exact_source_types(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.ingest.conversation_memory import index_conversation_turns
+
+    client = _client(monkeypatch, tmp_path, [("n", "alpha sharedterm note")])
+    db = db_of(monkeypatch)
+    n = 100
+
+    def one_hot(texts: list[str]) -> list[list[float]]:
+        nonlocal n
+        out = []
+        for _ in texts:
+            vec = [0.0] * DIM
+            vec[n % DIM] = 1.0
+            n += 1
+            out.append(vec)
+        return out
+
+    index_conversation_turns(
+        db_path=db,
+        conversation_id="c1",
+        kind="qa",
+        turns=[("user", "sharedterm decision"), ("assistant", "ack")],
+        turn_start=0,
+        max_artifact_chars=MAXC,
+        embedding_model=MODEL,
+        embed_fn=one_hot,  # type: ignore[arg-type]
+    )
+    results = client.post("/api/v1/retrieval/search", json={"query": "sharedterm"}).json()[
+        "results"
+    ]
+    assert len(results) == 2
+    by_excerpt = {("User:" in r["excerpt"]): r for r in results}
+    assert by_excerpt[False]["source_type"] == "note"
+    assert by_excerpt[True]["source_type"] == "tb_conversation"
+    for hit in results:
+        chunk = client.get(f"/api/v1/chunks/{hit['chunk_id']}").json()
+        assert chunk["source_type"] == hit["source_type"]

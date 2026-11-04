@@ -21,7 +21,7 @@ from app.core.config import Settings, get_settings
 from app.core.grounding import REFUSAL_ANSWER
 from app.core.meta_client import MetaAPIError
 from app.db.connection import init_db
-from app.ingest.pipeline import ingest_source
+from app.ingest.pipeline import IngestResult, ingest_source
 from app.main import create_app
 
 DIM = 384
@@ -58,10 +58,24 @@ def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_conversation_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the conversation-index seam to a no-op (never embeds).
+
+    Hook tests re-stub this symbol with recording stubs; every other test
+    posts queries without indexing side effects.
+    """
+    monkeypatch.setattr(
+        "app.api.query.index_conversation_turns",
+        lambda **kwargs: IngestResult(artifact_id="stub-artifact", chunk_count=0),
+    )
+
+
 def _client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     seed_notes: list[tuple[str, str]] | None = None,
+    raise_server_exceptions: bool = True,
 ) -> TestClient:
     db = str(tmp_path / "query_api.db")
     init_db(db)
@@ -91,7 +105,7 @@ def _client(
     monkeypatch.setenv("DATABASE_PATH", db)
     monkeypatch.setenv("MODEL_API_KEY", "test-key")
     monkeypatch.setattr("app.api.query.hybrid_search", _search_stub)
-    return TestClient(create_app())
+    return TestClient(create_app(), raise_server_exceptions=raise_server_exceptions)
 
 
 def stub_chat(
@@ -126,7 +140,13 @@ def test_evidence_happy_path_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert body["mode_used"] == "evidence"
     assert body["answer"] == "Modal volume [1]"
     assert len(body["citations"]) == 1
-    assert set(body["citations"][0].keys()) == {"chunk_id", "artifact_id", "span", "excerpt"}
+    assert set(body["citations"][0].keys()) == {
+        "chunk_id",
+        "artifact_id",
+        "span",
+        "excerpt",
+        "source_type",
+    }
     assert "persistent volume" in body["citations"][0]["excerpt"]
     assert len(body["conversation_id"]) == 32
 
@@ -379,3 +399,124 @@ def test_openapi_contains_query_paths(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert "/api/v1/query" in paths
     assert "/api/v1/conversations" in paths
     assert "/api/v1/conversations/{conversation_id}" in paths
+
+
+def _record_index(monkeypatch: pytest.MonkeyPatch) -> list:
+    calls: list = []
+
+    def fake(**kwargs: object) -> IngestResult:
+        calls.append(kwargs)
+        return IngestResult(artifact_id="rec-artifact", chunk_count=1)
+
+    monkeypatch.setattr("app.api.query.index_conversation_turns", fake)
+    return calls
+
+
+def test_query_indexes_new_turns_at_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    stub_chat(monkeypatch)
+    calls = _record_index(monkeypatch)
+    body = client.post("/api/v1/query", json={"question": "hi?"}).json()
+    assert len(calls) == 1
+    assert calls[0]["conversation_id"] == body["conversation_id"]
+    assert calls[0]["kind"] == "qa"
+    assert calls[0]["turns"] == [("user", "hi?"), ("assistant", "canned")]
+    assert calls[0]["turn_start"] == 0
+
+
+def test_query_continue_indexes_at_next_idx(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    stub_chat(monkeypatch)
+    calls = _record_index(monkeypatch)
+    cid = client.post("/api/v1/query", json={"question": "one?"}).json()["conversation_id"]
+    client.post("/api/v1/query", json={"question": "two?", "conversation_id": cid})
+    assert [c["turn_start"] for c in calls] == [0, 2]
+    assert all(c["conversation_id"] == cid for c in calls)
+    assert calls[1]["turns"] == [("user", "two?"), ("assistant", "canned")]
+
+
+def test_query_citations_carry_source_type(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    stub_chat(monkeypatch, json.dumps({"answer": "Modal volume [1]", "citations": [1]}))
+    body = client.post(
+        "/api/v1/query", json={"question": "Where does the SQLite file live?", "mode": "evidence"}
+    ).json()
+    assert len(body["citations"]) == 1
+    assert body["citations"][0]["source_type"] == "note"
+
+
+def _one_hot_vecs() -> object:
+    n = 0
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        nonlocal n
+        out = []
+        for _ in texts:
+            vec = [0.0] * DIM
+            vec[n % DIM] = 1.0
+            n += 1
+            out.append(vec)
+        return out
+
+    return embed
+
+
+def test_delete_conversation_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from app.db.conversations import create_conversation_with_turns
+    from app.ingest.conversation_memory import index_conversation_turns
+
+    client = _client(monkeypatch, tmp_path)
+    db = db_of(monkeypatch)
+    cid, _ = create_conversation_with_turns(
+        db, "qa", [("user", "u", "evidence", "[]"), ("assistant", "a", "evidence", "[]")]
+    )
+    index_conversation_turns(
+        db_path=db,
+        conversation_id=cid,
+        kind="qa",
+        turns=[("user", "u"), ("assistant", "a")],
+        turn_start=0,
+        max_artifact_chars=MAXC,
+        embedding_model=MODEL,
+        embed_fn=_one_hot_vecs(),  # type: ignore[arg-type]
+    )
+    response = client.delete(f"/api/v1/conversations/{cid}")
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted": {"conversations": 1, "turns": 2, "artifacts": 1, "chunks": 1, "facts": 0},
+        "unlinked": {"facts": 0},
+    }
+    assert client.get(f"/api/v1/conversations/{cid}").status_code == 404
+    assert all(a["id"] != cid for a in client.get("/api/v1/artifacts").json())
+    assert "tb_conversation" not in {
+        a["source_type"] for a in client.get("/api/v1/artifacts").json()
+    }
+
+
+def test_delete_unknown_conversation_is_404(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    response = client.delete(f"/api/v1/conversations/{'0' * 32}")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "conversation not found"}
+
+
+def test_index_failure_propagates_500_with_turns_persisted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client(monkeypatch, tmp_path, raise_server_exceptions=False)
+    stub_chat(monkeypatch)
+
+    def boom(**kwargs: object) -> IngestResult:
+        raise RuntimeError("embed boom")
+
+    monkeypatch.setattr("app.api.query.index_conversation_turns", boom)
+    response = client.post("/api/v1/query", json={"question": "hi?"})
+    assert response.status_code == 500
+    listed = client.get("/api/v1/conversations").json()
+    assert len(listed) == 1
+    detail = client.get(f"/api/v1/conversations/{listed[0]['id']}").json()
+    assert [t["idx"] for t in detail["turns"]] == [0, 1]

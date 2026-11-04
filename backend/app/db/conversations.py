@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from app.db.artifacts import _delete_artifacts_cascade_conn
 from app.db.connection import connect
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,74 @@ def get_conversation(db_path: str, conversation_id: str) -> ConversationDetail |
             for r in turn_rows
         ],
     )
+
+
+@dataclass
+class ConversationDeleteCounts:
+    conversation_id: str
+    turns: int
+    artifacts: int
+    chunks: int
+    facts: int
+    unlinked_facts: int
+
+
+def delete_conversation_cascade(
+    db_path: str, conversation_id: str
+) -> ConversationDeleteCounts | None:
+    """Delete a conversation, its turns, and its indexed artifacts in ONE transaction.
+
+    Returns None when the conversation does not exist. Artifact deletion runs
+    through the shared cascade core (``_delete_artifacts_cascade_conn`` — the
+    private cross-module import is deliberate so deliverable 4 reuses the
+    exact same semantics); turns cascade via FK and linked attempts keep
+    their rows with ``conversation_id`` NULLed (practice history stays
+    independently available). Never touches explanations (no linkage).
+    """
+    conn = connect(db_path)
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            turns = conn.execute(
+                "SELECT COUNT(*) AS n FROM turns WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()["n"]
+            artifact_ids = [
+                r["id"]
+                for r in conn.execute(
+                    "SELECT id FROM artifacts"
+                    " WHERE json_extract(origin, '$.adapter') = 'tb_conversation'"
+                    " AND json_extract(origin, '$.conversation_id') = ?"
+                    " ORDER BY created_at, id",
+                    (conversation_id,),
+                ).fetchall()
+            ]
+            counts = _delete_artifacts_cascade_conn(conn, artifact_ids)
+            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+    finally:
+        conn.close()
+    result = ConversationDeleteCounts(
+        conversation_id=conversation_id,
+        turns=turns,
+        artifacts=counts["artifacts"],
+        chunks=counts["chunks"],
+        facts=counts["facts"],
+        unlinked_facts=counts["unlinked_facts"],
+    )
+    logger.info(
+        "deleted conversation: id=%s turns=%d artifacts=%d chunks=%d facts=%d unlinked=%d",
+        conversation_id,
+        turns,
+        result.artifacts,
+        result.chunks,
+        result.facts,
+        result.unlinked_facts,
+    )
+    return result
 
 
 def list_conversations(db_path: str) -> list[ConversationSummary]:

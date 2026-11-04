@@ -8,6 +8,8 @@ lesson as context); deletion stays Phase 3 work.
 Test seams: ``hybrid_search`` and ``chat_completion`` are imported BY NAME
 so tests can ``monkeypatch.setattr("app.api.query.hybrid_search", stub)``
 and ``...chat_completion`` (mirrors the ingest/retrieval router seams).
+``index_conversation_turns``, ``get_chunk_source_types``, and
+``delete_conversation_cascade`` are likewise BY NAME for the same reason.
 """
 
 from __future__ import annotations
@@ -27,14 +29,17 @@ from app.core.grounding import (
     select_history,
 )
 from app.core.meta_client import DEFAULT_META_MODEL, MetaAPIError, chat_completion
+from app.db.chunks import get_chunk_source_types
 from app.db.connection import EmbeddingDimMismatchError
 from app.db.conversations import (
     append_turns,
     create_conversation_with_turns,
+    delete_conversation_cascade,
     get_conversation,
     list_conversations,
 )
 from app.db.explanations import get_explanation
+from app.ingest.conversation_memory import index_conversation_turns
 from app.llm.qa import QaValidationError, answer_question
 from app.retrieval.search import TOP_K_DEFAULT, TOP_K_MAX, hybrid_search
 
@@ -60,6 +65,7 @@ class CitationOut(BaseModel):
     artifact_id: str
     span: list[int]
     excerpt: str
+    source_type: str
 
 
 class QueryResponse(BaseModel):
@@ -91,6 +97,11 @@ class ConversationSummaryOut(BaseModel):
     kind: str
     created_at: str
     turn_count: int
+
+
+class ConversationDeleteOut(BaseModel):
+    deleted: dict[str, int]
+    unlinked: dict[str, int]
 
 
 @router.post("/query", response_model=QueryResponse)
@@ -173,12 +184,14 @@ async def post_query(body: QueryRequest) -> QueryResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
+    source_types = get_chunk_source_types(db_path, [c.chunk_id for c in result.citations])
     citations = [
         CitationOut(
             chunk_id=c.chunk_id,
             artifact_id=c.artifact_id,
             span=[c.span_start, c.span_end],
             excerpt=c.excerpt,
+            source_type=source_types[c.chunk_id],
         )
         for c in result.citations
     ]
@@ -196,6 +209,16 @@ async def post_query(body: QueryRequest) -> QueryResponse:
     else:
         append_turns(db_path, existing.id, turns)
         conversation_id = existing.id
+    index_conversation_turns(
+        db_path=db_path,
+        conversation_id=conversation_id,
+        kind="qa",
+        turns=[(role, content) for role, content, _, _ in turns],
+        turn_start=0 if existing is None else len(existing.turns),
+        max_artifact_chars=settings.max_artifact_chars,
+        embedding_model=settings.embedding_model,
+        embed_fn=None,
+    )
     logger.info(
         "query answered: mode=%s citations=%d conversation=%s",
         result.mode_used,
@@ -243,4 +266,22 @@ def get_conversation_endpoint(conversation_id: str) -> ConversationOut:
             )
             for t in detail.turns
         ],
+    )
+
+
+@router.delete("/conversations/{conversation_id}", response_model=ConversationDeleteOut)
+def delete_conversation_endpoint(conversation_id: str) -> ConversationDeleteOut:
+    """Delete a conversation with full derived cascade (turns, artifacts, orphans)."""
+    counts = delete_conversation_cascade(get_settings().database_path, conversation_id)
+    if counts is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return ConversationDeleteOut(
+        deleted={
+            "conversations": 1,
+            "turns": counts.turns,
+            "artifacts": counts.artifacts,
+            "chunks": counts.chunks,
+            "facts": counts.facts,
+        },
+        unlinked={"facts": counts.unlinked_facts},
     )

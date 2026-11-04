@@ -78,6 +78,23 @@ def get_chunks_by_artifacts(db_path: str, artifact_ids: list[str]) -> dict[str, 
     return grouped
 
 
+def get_chunk_source_types(db_path: str, ids: list[int]) -> dict[int, str]:
+    """Map chunk ids to their artifact's ``source_type`` in ONE connection."""
+    if not ids:
+        return {}
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT c.id, a.source_type FROM chunks c"
+            " JOIN artifacts a ON a.id = c.artifact_id"
+            f" WHERE c.id IN ({','.join('?' * len(ids))})",
+            tuple(ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {r["id"]: r["source_type"] for r in rows}
+
+
 def search_bm25_ids(db_path: str, match_expr: str, limit: int) -> list[int]:
     """Chunk IDs matching the FTS5 expression, best-first (lower bm25 first)."""
     conn = connect(db_path)
