@@ -149,3 +149,36 @@ export interface LearnerProfileUpdate {
   emphasis?: Partial<LearnerEmphasis>
   how_i_learn?: string
 }
+
+export interface ArtifactSummary {
+  id: string
+  title: string
+  source_type: string
+  created_at: string
+  chunk_count: number
+  fact_count: number
+}
+
+export interface ExtractRequest {
+  artifact_ids: string[]
+}
+
+export interface ExtractLink {
+  to_fact: string
+  relation: string
+}
+
+export interface ExtractFact {
+  fact_id: string
+  kind: string
+  status: string
+  summary: string
+  skills: string[]
+  confidence: number
+  chunk_ids: number[]
+  links: ExtractLink[]
+}
+
+export interface ExtractResponse {
+  facts: ExtractFact[]
+}

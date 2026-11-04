@@ -133,7 +133,7 @@ Sandboxed sessions deny all direct sockets (TCP/Unix bind and connect) — local
 - Backend live checks: use in-process `TestClient` with the real key and a scratch DB — same routers, model calls, and persistence; document as an equivalent procedure.
 - Automated browser E2E: use the Playwright MCP browser against the deployed app URL, never localhost.
 - Always verify deployment freshness before browser E2E; an outdated deployment never validates new code.
-- When deployment is out of the deliverable's scope, the blocked browser check is `NOT_PERFORMED` (with reason) and its criterion is `UNVERIFIED` as pending deployment (with manual steps) — never a failure, never a pass.
+- For deliverables with browser-verifiable changes, redeploying to Modal is part of verification, not out of scope: rebuild the frontend same-origin (`VITE_API_URL=`), redeploy, verify freshness (new bundle hash + new routes live), then run the Playwright MCP browser E2E. Only when deployment itself is impossible (missing credentials, blocked deploy command) is the browser check `NOT_PERFORMED` (with reason) and its criterion `UNVERIFIED` pending deployment (with manual steps) — never a failure, never a pass.
 - Never weaken the sandbox or add dependencies to work around these restrictions.
 
 ---

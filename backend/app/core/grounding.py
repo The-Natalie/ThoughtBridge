@@ -320,3 +320,76 @@ def build_explanation_context(explanation: Mapping[str, object]) -> str:
             rendered = str(value)
         lines.append(f"{key}: {rendered}")
     return "\n".join(lines)
+
+
+# --- Work extraction contracts (PRD F-5) -------------------------------------
+
+EXTRACTION_KINDS: tuple[str, ...] = ("problem", "decision", "accomplishment", "skill")
+
+EXTRACTION_STATUSES: tuple[str, ...] = ("proposed", "rejected", "completed")
+
+LINK_RELATIONS: tuple[str, ...] = (
+    "constrained_by",
+    "considered",
+    "rejected_because",
+    "decided",
+    "implemented_by",
+    "resulted_in",
+)
+
+EXTRACTION_PROMPT_VERSION = "extract-v1"
+
+EXTRACTION_SYSTEM_PROMPT = (
+    "You extract structured facts about the user's work from their notes. "
+    "Closed world: use ONLY the numbered passages provided. Every fact must cite "
+    "at least one chunk_id from those passages as its evidence. "
+    "Status semantics: 'completed' requires an explicit user statement that the work "
+    "was done, shipped, fixed, or merged — discussion alone is never completion; "
+    "'rejected' means an approach was considered and then discarded, and the fact "
+    "must state the reason; 'proposed' is everything else, including ideas, plans, "
+    "and assistant suggestions in pasted conversations. "
+    "Anti-invention: discussion never upgrades to accomplishment; never invent steps, "
+    "outcomes, or completions the passages do not state; rejected approaches with "
+    "their reasons are first-class records of engineering judgment. "
+    "Kind semantics: 'problem' for issues and constraints encountered, 'decision' for "
+    "choices made with reasoning, 'accomplishment' for completed work, 'skill' for a "
+    "standalone demonstrated capability (its summary names the skill and its skills "
+    "array repeats it); every fact also lists demonstrated skills in its skills array. "
+    "Link semantics (each link goes from the enclosing fact to another fact): "
+    "'constrained_by' points at the constraint fact, 'considered' points from a "
+    "problem at an approach, 'rejected_because' points from an approach at the "
+    "reason, 'decided' points from a problem at the decision, 'implemented_by' "
+    "points from a decision at the accomplishment, 'resulted_in' points from a "
+    "decision or accomplishment at the outcome. "
+    "Output JSON only, no markdown fences. " + UNTRUSTED_PASSAGE_FRAMING
+)
+
+EXTRACTION_JSON_INSTRUCTIONS = (
+    'Respond with a single JSON object: {"facts": [<fact>, ...]} where each fact is '
+    '{"kind": "<problem|decision|accomplishment|skill>", "status": '
+    '"<proposed|rejected|completed>", "summary": "<non-empty summary>", "skills": '
+    '["<demonstrated skill>", ...], "confidence": <0.0-1.0>, "chunk_ids": [<cited '
+    "chunk IDs, at least one>], "
+    '"links": [{"to": <0-based index of another fact in this same array>, '
+    '"relation": "<one of constrained_by|considered|rejected_because|decided|'
+    'implemented_by|resulted_in>}, ...]}. "to" must reference another fact in the '
+    "same array, never the fact itself. An empty facts array is allowed when "
+    "nothing is extractable. No other keys, no prose outside the JSON."
+)
+
+
+def build_extraction_messages(
+    passages: list[NumberedPassage],
+    career_block: str,
+) -> list[dict[str, str]]:
+    """Assemble OpenAI-shaped chat messages for one work extraction.
+
+    ``career_block`` is a pre-rendered context string (empty when absent).
+    """
+    messages = [{"role": "system", "content": EXTRACTION_SYSTEM_PROMPT}]
+    if career_block:
+        messages.append({"role": "system", "content": career_block})
+    blocks = [f"Passage [{p.n}] (chunk_id={p.chunk_id}):\n{p.text}" for p in passages]
+    user_content = "\n\n".join([*blocks, EXTRACTION_JSON_INSTRUCTIONS])
+    messages.append({"role": "user", "content": user_content})
+    return messages

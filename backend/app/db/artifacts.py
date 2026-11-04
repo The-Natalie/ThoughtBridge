@@ -120,6 +120,29 @@ def list_artifacts(db_path: str) -> list[ArtifactSummary]:
     ]
 
 
+def find_missing_artifact_ids(db_path: str, artifact_ids: list[str]) -> list[str]:
+    """Return the requested ids NOT present in ``artifacts`` (order-preserving).
+
+    One connection, one query. Used by the work router for its 404 branch.
+    """
+    if not artifact_ids:
+        return []
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            f"SELECT id FROM artifacts WHERE id IN ({','.join('?' * len(artifact_ids))})",
+            tuple(artifact_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    present = {r["id"] for r in rows}
+    missing: list[str] = []
+    for aid in artifact_ids:
+        if aid not in present and aid not in missing:
+            missing.append(aid)
+    return missing
+
+
 def get_artifact_detail(db_path: str, artifact_id: str) -> ArtifactDetail | None:
     """Full artifact row with ordered chunks and linked fact/interpretation ids."""
     conn = connect(db_path)
