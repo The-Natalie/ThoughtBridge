@@ -7,16 +7,23 @@ assertions only; prompt prose stays tunable.
 import pytest
 
 from app.core.grounding import (
+    EVALUATION_JSON_INSTRUCTIONS,
     EVIDENCE_SYSTEM_PROMPT,
     MAX_HISTORY_CHARS,
     MAX_HISTORY_TURNS,
     QA_JSON_INSTRUCTIONS,
+    QUESTION_JSON_INSTRUCTIONS,
     REFUSAL_ANSWER,
     TEACHING_SYSTEM_PROMPT,
     HistoryTurn,
     NumberedPassage,
+    build_evaluation_messages,
     build_messages,
+    build_practice_request_turn,
+    build_question_messages,
     build_refusal,
+    render_feedback_text,
+    resolve_grounding,
     route_auto,
     select_history,
 )
@@ -120,3 +127,114 @@ def test_build_refusal_names_silent_notes() -> None:
 def test_json_instructions_name_contract() -> None:
     assert "answer" in QA_JSON_INSTRUCTIONS
     assert "citations" in QA_JSON_INSTRUCTIONS
+
+
+@pytest.mark.parametrize(
+    ("mode", "kind", "marker"),
+    [
+        ("learning", None, "explain-back"),
+        ("interview", "experience", "Closed world"),
+        ("interview", "technical", "Open world"),
+    ],
+)
+def test_build_question_messages_branch_prompts(mode: str, kind: str | None, marker: str) -> None:
+    messages = build_question_messages(
+        mode=mode, kind=kind, reference_block="REF", career_block="", focus=None
+    )
+    assert [m["role"] for m in messages] == ["system", "user"]
+    assert marker in messages[0]["content"]
+    assert "REF" in messages[1]["content"]
+    assert '"question"' in messages[1]["content"]
+
+
+def test_build_question_messages_career_block_and_focus() -> None:
+    messages = build_question_messages(
+        mode="interview",
+        kind="technical",
+        reference_block="",
+        career_block="CAREER",
+        focus="APIs",
+    )
+    assert [m["role"] for m in messages] == ["system", "system", "user"]
+    assert messages[1]["content"] == "CAREER"
+    assert "untrusted" in messages[2]["content"]
+    assert "APIs" in messages[2]["content"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "kind", "marker"),
+    [
+        ("learning", None, "lesson ONLY"),
+        ("interview", "experience", "supported by neither"),
+        ("interview", "technical", "conceptual accuracy"),
+    ],
+)
+def test_build_evaluation_messages_branch_rubrics(mode: str, kind: str | None, marker: str) -> None:
+    messages = build_evaluation_messages(
+        mode=mode, kind=kind, reference_block="REF", answer="my answer"
+    )
+    assert [m["role"] for m in messages] == ["system", "user"]
+    assert marker in messages[0]["content"]
+    assert "REF" in messages[1]["content"]
+    assert "my answer" in messages[1]["content"]
+    assert "untrusted" in messages[1]["content"]
+
+
+def test_evaluation_json_instructions_name_feedback_shape() -> None:
+    for key in ("correct", "missing", "inaccurate", "terminology", "next_step"):
+        assert key in EVALUATION_JSON_INSTRUCTIONS
+
+
+def test_question_json_instructions_name_question() -> None:
+    assert '"question"' in QUESTION_JSON_INSTRUCTIONS
+
+
+@pytest.mark.parametrize(
+    ("mode", "kind", "personal", "expected"),
+    [
+        ("interview", "experience", True, "from your notes"),
+        ("interview", "experience", False, "from your notes"),
+        ("interview", "technical", True, "both"),
+        ("interview", "technical", False, "general explanation"),
+        ("learning", None, True, "both"),
+        ("learning", None, False, "general explanation"),
+    ],
+)
+def test_resolve_grounding_truth_table(
+    mode: str, kind: str | None, personal: bool, expected: str
+) -> None:
+    assert resolve_grounding(mode, kind, personal) == expected
+
+
+def test_build_practice_request_turn_format() -> None:
+    assert (
+        build_practice_request_turn("learning", None, "explain back X")
+        == "Practice (learning): explain back X"
+    )
+    assert (
+        build_practice_request_turn("interview", "experience", "answer Y")
+        == "Practice (interview/experience): answer Y"
+    )
+
+
+def test_render_feedback_text_full() -> None:
+    text = render_feedback_text(
+        {
+            "correct": ["a"],
+            "missing": ["b"],
+            "inaccurate": [],
+            "terminology": ["c"],
+            "next_step": "retry",
+        }
+    )
+    assert "Correct:\n- a" in text
+    assert "Missing:\n- b" in text
+    assert "Inaccurate:\n(none)" in text
+    assert "Terminology:\n- c" in text
+    assert "Next step: retry" in text
+
+
+def test_render_feedback_text_odd_shapes_never_raise() -> None:
+    assert "(none)" in render_feedback_text({})
+    assert "(none)" in render_feedback_text({"correct": "not-a-list", "next_step": None})
+    assert "42" in render_feedback_text({"correct": [42], "next_step": 42})

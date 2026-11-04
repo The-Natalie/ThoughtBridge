@@ -15,6 +15,7 @@ from app.api.health import liveness_router as health_liveness_router
 from app.api.health import router as health_router
 from app.api.ingest import router as ingest_router
 from app.api.learn import router as learn_router
+from app.api.practice import router as practice_router
 from app.api.query import router as query_router
 from app.api.retrieval import router as retrieval_router
 from app.api.work import router as work_router
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(query_router, prefix="/api/v1")
     app.include_router(work_router, prefix="/api/v1")
+    app.include_router(practice_router, prefix="/api/v1")
     app.include_router(health_liveness_router)
     settings = get_settings()
     if settings.static_dir:

@@ -186,6 +186,64 @@ def test_check_embedding_dim_rejects_mismatch(db_path: Path) -> None:
         check_embedding_dim(db_path, "other-model", 768)
 
 
+def test_attempts_v1_to_v2_migration(tmp_path: Path) -> None:
+    """A synthetic v1 DB (meta + v1 attempts only) upgrades cleanly via init_db."""
+    path = tmp_path / "v1.db"
+    raw = sqlite3.connect(str(path))
+    try:
+        with raw:
+            raw.execute(
+                "CREATE TABLE attempts (id TEXT PRIMARY KEY, mode TEXT NOT NULL,"
+                " question_kind TEXT, explanation_id TEXT, question TEXT NOT NULL,"
+                " answer TEXT, feedback TEXT, grounding TEXT, created_at TEXT NOT NULL)"
+            )
+            raw.execute(
+                "INSERT INTO attempts (id, mode, question, created_at)"
+                " VALUES ('a1', 'learning', 'q?', 'now')"
+            )
+            raw.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            raw.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+            raw.execute(
+                "INSERT INTO meta (key, value) VALUES"
+                " ('embedding_model', 'BAAI/bge-small-en-v1.5'), ('embedding_dim', '384')"
+            )
+    finally:
+        raw.close()
+
+    init_db(path)
+
+    conn = connect(path)
+    try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(attempts)")}
+        assert "conversation_id" in cols
+        assert "reference_json" in cols
+        version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
+        assert version == "2"
+        row = conn.execute(
+            "SELECT id, mode, question, conversation_id, reference_json FROM attempts"
+        ).fetchone()
+        assert row["id"] == "a1"
+        assert row["mode"] == "learning"
+        assert row["question"] == "q?"
+        assert row["conversation_id"] is None
+        assert row["reference_json"] is None
+        # Full schema was created around the pre-existing tables.
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"artifacts", "chunks", "conversations", "turns"} <= names
+    finally:
+        conn.close()
+
+    init_db(path)  # idempotency: second init is a no-op success
+    conn = connect(path)
+    try:
+        version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]
+    finally:
+        conn.close()
+    assert version == "2"
+    assert count == 1
+
+
 def test_turn_role_check_enforced(db_path: Path) -> None:
     conn = connect(db_path)
     try:

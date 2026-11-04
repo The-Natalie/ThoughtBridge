@@ -1,4 +1,6 @@
--- ThoughtBridge schema v1. Single-writer SQLite. Idempotent: safe to execute repeatedly.
+-- ThoughtBridge schema v2. Single-writer SQLite. Idempotent: safe to execute repeatedly.
+-- v2 adds attempts.conversation_id + attempts.reference_json (see _migrate in
+-- connection.py, which upgrades pre-existing v1 databases).
 -- Conventions: TEXT uuid PKs except chunks (INTEGER, rowid-aligned with chunks_vec);
 -- timestamps TEXT ISO-8601 UTC; JSON columns TEXT. FK enforcement + vec0 extension
 -- loading happen in connection.py (every connection), not here.
@@ -7,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '2');
 INSERT OR IGNORE INTO meta (key, value) VALUES ('embedding_model', 'BAAI/bge-small-en-v1.5');
 INSERT OR IGNORE INTO meta (key, value) VALUES ('embedding_dim', '384');
 
@@ -126,6 +128,8 @@ CREATE TABLE IF NOT EXISTS attempts (
   answer TEXT,
   feedback TEXT,
   grounding TEXT,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  reference_json TEXT,
   created_at TEXT NOT NULL
 );
 

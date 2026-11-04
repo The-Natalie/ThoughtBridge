@@ -30,11 +30,38 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Upgrade pre-existing databases to the current schema version.
+
+    Additive only, idempotent: each step checks ``PRAGMA table_info`` (the
+    real guard — never the meta version value alone) and applies only when
+    the column is missing. v1→v2: ``attempts.conversation_id`` +
+    ``attempts.reference_json`` (both nullable; pre-migration rows read NULL).
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(attempts)")}
+    added: list[str] = []
+    with conn:
+        if "conversation_id" not in cols:
+            conn.execute(
+                "ALTER TABLE attempts ADD COLUMN conversation_id TEXT"
+                " REFERENCES conversations(id) ON DELETE SET NULL"
+            )
+            added.append("attempts.conversation_id")
+        if "reference_json" not in cols:
+            conn.execute("ALTER TABLE attempts ADD COLUMN reference_json TEXT")
+            added.append("attempts.reference_json")
+        if added:
+            conn.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+    for column in added:
+        logger.info("db migrate: added column %s", column)
+
+
 def init_db(path: str | Path) -> None:
     """Create all schema objects idempotently and log an init summary."""
     conn = connect(path)
     try:
         conn.executescript(SCHEMA_PATH.read_text())
+        _migrate(conn)
         tables = conn.execute(
             "SELECT COUNT(*) AS n FROM sqlite_master WHERE type IN ('table', 'trigger')"
         ).fetchone()["n"]

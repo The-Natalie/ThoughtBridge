@@ -1,7 +1,9 @@
 import { useState } from 'react'
 
 import ChatView from './views/ChatView'
+import InterviewView from './views/InterviewView'
 import LearnView from './views/LearnView'
+import PracticeView from './views/PracticeView'
 import WorkView from './views/WorkView'
 
 const VIEWS = [
@@ -9,8 +11,8 @@ const VIEWS = [
   { id: 'capture', label: 'Capture', blurb: 'Capture view — coming in Phase 1.3 (notes, pastes, uploads).' },
   { id: 'learn', label: 'Learn', blurb: '' },
   { id: 'work', label: 'Work', blurb: '' },
-  { id: 'practice', label: 'Practice', blurb: 'Practice view — coming in Phase 3 (Learning-mode loop).' },
-  { id: 'interview', label: 'Interview', blurb: 'Interview view — coming in Phase 3 (Interview-mode loop).' },
+  { id: 'practice', label: 'Practice', blurb: '' },
+  { id: 'interview', label: 'Interview', blurb: '' },
 ] as const
 
 type ViewId = (typeof VIEWS)[number]['id']
@@ -40,7 +42,19 @@ function App() {
         </nav>
       </header>
       <main className="mt-6">
-        {view === 'chat' ? <ChatView /> : view === 'learn' ? <LearnView /> : view === 'work' ? <WorkView /> : <p>{active.blurb}</p>}
+        {view === 'chat' ? (
+          <ChatView />
+        ) : view === 'learn' ? (
+          <LearnView />
+        ) : view === 'work' ? (
+          <WorkView />
+        ) : view === 'practice' ? (
+          <PracticeView />
+        ) : view === 'interview' ? (
+          <InterviewView />
+        ) : (
+          <p>{active.blurb}</p>
+        )}
       </main>
     </div>
   )

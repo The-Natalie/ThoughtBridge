@@ -1,6 +1,6 @@
 # Prime Summary — ThoughtBridge
 
-Organized by implementation phase. Current phase: **Phase 2**. Ordered build list: [.agents/plans/phase-2-build-list.md](phase-2-build-list.md).
+Organized by implementation phase. Current phase: **Phase 3**. Ordered build list: [.agents/plans/phase-3-build-list.md](phase-3-build-list.md).
 
 ## Phase 1 — Foundation & Retrieval (PRD §12)
 
@@ -91,3 +91,48 @@ Organized by implementation phase. Current phase: **Phase 2**. Ordered build lis
 
 - **Current phase:** Phase 2 — Learning & work. Goal: the two defining capabilities function.
 - **Build list:** [.agents/plans/phase-2-build-list.md](phase-2-build-list.md) — 6 ordered deliverables (explainer + Learn view, explanation memory + markers, learner profile, work extraction + Work view, career profile + filtering, PDF/Word adapters Preferred), each with scope boundaries, plus the validation gate and out-of-phase exclusions.
+
+## Phase 3 — Practice Loop & Integrity (PRD §12)
+
+**Date:** 2026-11-04
+**Branch:** `main` (commit `f5d759f` — PDF + Word upload adapters, Phase 2 complete)
+
+### Project Overview
+
+- **Purpose:** ThoughtBridge — AI-powered memory/learning app: analogy-based learning, work documentation with accomplishment recognition, interview prep grounded in real history.
+- **Type:** Full-stack web app, Phases 1–2 complete: ingest → hybrid retrieve → grounded Q&A → eight-step explainer with memory/markers → learner profile → work extraction with reasoning chains → career profile + filtering → PDF/Word uploads, deployed on Modal.
+- **Primary stack:** Python 3.12 + FastAPI/Pydantic v2 (`uv`), single-file SQLite (FTS5 + sqlite-vec), fastembed BGE-small (384-dim), Meta Model API `muse-spark-1.3` via single client module, React 19 + TS + Vite + Tailwind 4, `pypdf` + `python-docx` installed.
+- **State:** PRD v1.2; all 6 Phase 2 deliverables committed with plans, execution reports, and independent reviews, plus a placement-instruction refinement (`a25b73e`); no Phase 3 plans exist yet.
+
+### Architecture
+
+- **Shape:** one pipeline, three surfaces — holding: Phase 3 adds the Practice Loop (third surface) plus trust guarantees (conversation memory, deletion cascade) over the existing pipeline; no new subsystems.
+- **Patterns observed in code:** thin routers (`api/`: health, ingest, learn, query, retrieval, work — no practice/conversations/prompts routers yet) with logic in `ingest/`/`retrieval/`/`llm/`; shared grounding contracts in `core/grounding.py` (evidence/teaching/auto, untrusted-passage framing, history-not-evidence); schema-at-the-boundary for LLM outputs (`llm/qa.py`, `llm/explainer.py`, `llm/extraction.py`, `llm/memory.py`); per-table repositories in `db/` over `schema.sql` v1 (all Phase 3 tables — attempts, conversations/turns — already exist); single-URL Modal deploy (`modal_app.py`, persistent volume, `max_containers=1`).
+- **Directories:** `backend/app/{api,core,db,ingest,retrieval,llm}/` + `modal_app.py`; `frontend/src/{api,views}/` with Chat/Learn/Work live (plus Career/Learner profile panels) and Capture/Practice/Interview still placeholder stubs; `.agents/` + `.claude/` + `tools/` remain owner workflow tooling, not product.
+
+### Tech Stack
+
+- **Languages:** Python 3.12 (pinned, `uv`); TypeScript (frontend).
+- **Frameworks/libs:** FastAPI 0.136+, Pydantic v2, sqlite-vec, fastembed, httpx (Meta client), `pypdf` + `python-docx`; React 19, Vite 8, Tailwind 4.
+- **Build/package managers:** `uv` + `uv.lock` (backend); `npm` + `package-lock.json` (frontend). Commands in AGENTS.md verified.
+- **Testing:** pytest (26 backend test files) + ruff + mypy (non-strict); vitest (11 frontend test files) + oxlint. Deletion-cascade and no-evidence-mining tests are this phase's mandatory additions.
+
+### Core Principles
+
+- **Anti-invention at peak load:** this phase adds conversation mining (role-asymmetric: user turns candidate evidence, assistant turns never evidence) and deletion (independent-support cascade) — the two most load-bearing trust guarantees; both need dedicated tests, not just prompt text.
+- **Conventions:** `snake_case` backend / `PascalCase` components / plural `snake_case` tables; grounding prompts shared in `core/`, never copied per feature; citation/provenance rendering shared, not per-view; upstream Meta failures → 502 with cause, never swallowed.
+- **Docs:** PRD authoritative for scope; plans in `.agents/plans/`, execution reports in `.agents/execution-reports/`; never commit `.env`, `conversation-log/`, or real secrets.
+
+### Current State
+
+- **Active branch:** `main`, clean, up to date with `origin/main`.
+- **Recent focus:** Phase 2 completed in full — explainer → explanation memory → learner profile → work extraction → career profile → PDF/Word adapters (all Preferred work landed, nothing cut), plus a Learn streaming/placement refinement.
+- **Observations/concerns:** (1) **Deadline is today** (Nov 4, ~9 PM ET) and both Phase 3 (Practice Loop + integrity) and Phase 4 (seeded demo, deploy verification, README, 3-min video, submission) are outstanding — Phase 4 was supposed to be reserved Nov 3–4 and that buffer is gone; (2) no `practice.py`, `conversations`, or checkpoint-prompt routers exist yet and Practice/Interview views are still stubs — the entire third surface is greenfield; (3) the attempts/conversations/turns tables already exist in schema v1, so Phase 3 is pure API + LLM + UI work with no migration needed.
+- **Constraints before implementation:** Meta-only LLM via `app/core/meta_client.py`; generous token budgets (Spark hidden reasoning burns `max_tokens`); competition-window code only; deliverable 6 (rerank/HyDE) lands only on measured recall failure — default skip; conversation-memory fallback available if behind (turns + chunked transcripts with role tags, polished display deferred); sandbox blocks local servers — verify via TestClient + redeploy + Playwright-against-deployed per AGENTS.md.
+- **Next highest-leverage task:** `/plan-feature` for Phase 3 deliverables 1–2 (shared Practice Loop endpoints + mode-parameterized rubrics — the only remaining user-facing surface, and the demo's third capability); then conversation memory (3) and deletion cascade (4) as the trust-guarantee slice.
+- **Consult before implementing:** PRD §7 F-7/F-8 (Practice Loop, interview surface) + F-10/F-12 (deletion, conversation memory), §10 Practice + Conversations contracts, §12 Phase 3 gate; existing `core/grounding.py`, `llm/qa.py` (schema-validation pattern), `db/conversations.py`, `db/explanations.py` (attempt-outcome linkage), `frontend/src/App.tsx` (view stubs to replace).
+
+### What's Next
+
+- **Current phase:** Phase 3 — Practice Loop & integrity. Goal: the feedback loop and trust guarantees close.
+- **Build list:** [.agents/plans/phase-3-build-list.md](phase-3-build-list.md) — 6 ordered deliverables (Practice Loop endpoints + views, mode-parameterized rubrics, `tb_conversation` memory adapter, deletion cascade + residue tests, checkpoint-prompt button + provenance pass, retrieval hardening only on measured failure), each with scope boundaries, plus the validation gate and out-of-phase exclusions.

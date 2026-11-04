@@ -139,6 +139,60 @@ def _matches_skill(skills: list[str], skill: str) -> bool:
     return any(entry.casefold() == wanted for entry in skills)
 
 
+def get_facts_by_ids(db_path: str, ids: list[str]) -> dict[str, FactRead]:
+    """Fetch facts by id with evidence + links, keyed by fact id.
+
+    Mirrors ``list_accomplishments`` hydration; any kind (the reader stays
+    general — callers own kind expectations). Missing ids are absent from
+    the result (callers detect them for stale-reference handling). Empty
+    ``ids`` returns ``{}`` without querying.
+    """
+    if not ids:
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, kind, status, summary, skills, confidence, created_at"
+            f" FROM facts WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        chunk_rows = conn.execute(
+            "SELECT fact_id, chunk_id FROM fact_chunks"
+            f" WHERE fact_id IN ({placeholders}) ORDER BY chunk_id",
+            ids,
+        ).fetchall()
+        link_rows = conn.execute(
+            "SELECT from_fact_id, to_fact_id, relation FROM fact_links"
+            f" WHERE from_fact_id IN ({placeholders}) ORDER BY to_fact_id, relation",
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    chunks_by_fact: dict[str, list[int]] = {}
+    for row in chunk_rows:
+        chunks_by_fact.setdefault(row["fact_id"], []).append(row["chunk_id"])
+    links_by_fact: dict[str, list[FactLinkRead]] = {}
+    for row in link_rows:
+        links_by_fact.setdefault(row["from_fact_id"], []).append(
+            FactLinkRead(to_fact=row["to_fact_id"], relation=row["relation"])
+        )
+    return {
+        row["id"]: FactRead(
+            fact_id=row["id"],
+            kind=row["kind"],
+            status=row["status"],
+            summary=row["summary"],
+            skills=_clean_skills(row["skills"]),
+            confidence=row["confidence"],
+            chunk_ids=chunks_by_fact.get(row["id"], []),
+            links=links_by_fact.get(row["id"], []),
+            created_at=row["created_at"],
+        )
+        for row in rows
+    }
+
+
 def list_accomplishments(
     db_path: str,
     *,

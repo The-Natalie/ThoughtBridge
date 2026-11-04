@@ -205,3 +205,60 @@ export interface ExplainStreamEvent {
   reused_from?: string | null
   message?: string
 }
+
+export type PracticeMode = 'learning' | 'interview'
+export type QuestionKind = 'experience' | 'technical'
+export type ReferenceKind = 'explanation' | 'facts' | 'general'
+export type GroundingLabel = 'from your notes' | 'general explanation' | 'both'
+
+export interface PracticeQuestionContext {
+  explanation_id?: string | null
+  focus?: string | null
+}
+
+export interface PracticeQuestionRequest {
+  mode: PracticeMode
+  question_kind?: QuestionKind | null
+  context?: PracticeQuestionContext
+  conversation_id?: string | null
+}
+
+export interface PracticeQuestionResponse {
+  attempt_id: string
+  question: string
+  question_kind: QuestionKind | null
+  reference_kind: ReferenceKind
+  conversation_id: string
+}
+
+export interface PracticeAnswerRequest {
+  attempt_id: string
+  answer: string
+}
+
+export interface PracticeFeedback {
+  correct: string[]
+  missing: string[]
+  inaccurate: string[]
+  terminology: string[]
+  next_step: string
+}
+
+export interface PracticeAnswerResponse {
+  feedback: PracticeFeedback
+  grounding: GroundingLabel
+}
+
+export interface PracticeAttempt {
+  id: string
+  mode: PracticeMode
+  question_kind: QuestionKind | null
+  explanation_id: string | null
+  concept: string | null
+  question: string
+  answer: string | null
+  feedback: PracticeFeedback | null
+  grounding: GroundingLabel | null
+  needs_retry: boolean
+  created_at: string
+}
