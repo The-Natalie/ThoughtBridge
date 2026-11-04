@@ -1,14 +1,9 @@
 import type { GroundingLabel, PracticeFeedback } from '../api/types'
+import GroundingBadge from './GroundingBadge'
 
 interface FeedbackCardProps {
   feedback: PracticeFeedback
   grounding: GroundingLabel
-}
-
-const GROUNDING_STYLES: Record<GroundingLabel, string> = {
-  'from your notes': 'border-green-600',
-  'general explanation': 'border-neutral-400',
-  both: 'border-blue-600',
 }
 
 function FeedbackSection({ title, items }: { title: string; items: string[] }) {
@@ -32,9 +27,7 @@ function FeedbackSection({ title, items }: { title: string; items: string[] }) {
 function FeedbackCard({ feedback, grounding }: FeedbackCardProps) {
   return (
     <div aria-label="Feedback" className="rounded border px-3 py-2">
-      <p aria-label="Grounding" className={`inline-block rounded border px-2 py-0.5 text-xs ${GROUNDING_STYLES[grounding]}`}>
-        {grounding}
-      </p>
+      <GroundingBadge grounding={grounding} />
       <FeedbackSection title="Correct" items={feedback.correct} />
       <FeedbackSection title="Missing" items={feedback.missing} />
       <FeedbackSection title="Inaccurate" items={feedback.inaccurate} />

@@ -4,6 +4,7 @@ import { listArtifacts } from '../api/artifacts'
 import { getChunk } from '../api/query'
 import { listAccomplishments, postExtract } from '../api/work'
 import type { ArtifactSummary, ChunkDetail, ExtractFact, ExtractResponse } from '../api/types'
+import CitationPanel from '../components/CitationPanel'
 import FactCard from '../components/FactCard'
 import CareerProfilePanel from './CareerProfilePanel'
 
@@ -283,23 +284,7 @@ function WorkView() {
       </section>
 
       {activeCitation && (
-        <div className="rounded border px-3 py-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold">
-              Chunk {activeCitation.id} · artifact {activeCitation.artifact_id} · span{' '}
-              {activeCitation.span[0]}–{activeCitation.span[1]}
-            </p>
-            <button
-              type="button"
-              aria-label="Close citation"
-              onClick={() => setActiveCitation(null)}
-              className="text-xs underline"
-            >
-              Close
-            </button>
-          </div>
-          <p className="mt-1 text-sm">{activeCitation.text}</p>
-        </div>
+        <CitationPanel chunk={activeCitation} onClose={() => setActiveCitation(null)} />
       )}
 
       <p className="text-xs">Conversations are saved and retrievable.</p>

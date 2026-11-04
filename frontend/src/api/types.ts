@@ -274,3 +274,47 @@ export interface PracticeAttempt {
   needs_retry: boolean
   created_at: string
 }
+
+export interface CheckpointPromptResponse {
+  prompt: string
+}
+
+export type ArtifactSourceType = 'note' | 'paste' | 'summary'
+
+export interface ArtifactCreate {
+  source_type: ArtifactSourceType
+  title?: string
+  content: string
+}
+
+export interface ArtifactCreated {
+  artifact_id: string
+  chunks: number
+}
+
+export interface UploadCreated {
+  artifact_id: string
+  chunks: number
+  extracted_chars: number
+  pages: number | null
+}
+
+export interface ArtifactChunk {
+  id: number
+  chunk_idx: number
+  span: [number, number]
+  text: string
+}
+
+export interface ArtifactDetail {
+  id: string
+  title: string
+  source_type: string
+  content: string
+  content_hash: string
+  origin: Record<string, string>
+  created_at: string
+  chunks: ArtifactChunk[]
+  fact_ids: string[]
+  interpretation_ids: string[]
+}

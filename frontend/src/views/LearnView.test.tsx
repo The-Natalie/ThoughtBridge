@@ -554,4 +554,37 @@ describe('LearnView', () => {
     render(<LearnView />)
     expect(screen.getByText('Conversations are saved and retrievable.')).toBeDefined()
   })
+
+  it('shows a grounding badge on uncited interrupt answers', async () => {
+    const fetch = mockFetchSequence([teachStream(), explanationDetail(), queryResponse()])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    fireEvent.change(screen.getByLabelText('Ask about this step'), { target: { value: 'why?' } })
+    fireEvent.click(screen.getByLabelText('Ask'))
+    expect(await screen.findByText('Because librarians retrieve.')).toBeDefined()
+    expect(screen.getByLabelText('Grounding').textContent).toBe('general explanation')
+    expect(screen.queryByLabelText(/Citation /)).toBeNull()
+  })
+
+  it('opens the chunk panel from an interrupt citation chip', async () => {
+    const fetch = mockFetchSequence([
+      teachStream(),
+      explanationDetail(),
+      queryResponse({
+        citations: [
+          { chunk_id: 3, artifact_id: 'a1', span: [0, 10], excerpt: 'Librarians retrieve things.', source_type: 'note' },
+        ],
+      }),
+      { id: 3, artifact_id: 'a1', chunk_idx: 0, span: [0, 10], text: 'FULL interrupt chunk text', source_type: 'note' },
+    ])
+    vi.stubGlobal('fetch', fetch)
+    await teach(fetch)
+    fireEvent.change(screen.getByLabelText('Ask about this step'), { target: { value: 'why?' } })
+    fireEvent.click(screen.getByLabelText('Ask'))
+    expect(await screen.findByText('Because librarians retrieve.')).toBeDefined()
+    expect(screen.getByLabelText('Grounding').textContent).toBe('both')
+    fireEvent.click(screen.getByLabelText('Citation 3'))
+    expect(await screen.findByText('FULL interrupt chunk text')).toBeDefined()
+    expect(fetch.mock.calls[3][0]).toBe('http://localhost:8000/api/v1/chunks/3')
+  })
 })

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 
 import { getChunk, postQuery } from '../api/query'
-import type { ChunkDetail, Citation, ModeUsed } from '../api/types'
+import type { ChunkDetail, Citation, GroundingLabel, ModeUsed } from '../api/types'
+import CitationPanel from '../components/CitationPanel'
+import GroundingBadge from '../components/GroundingBadge'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -10,9 +12,9 @@ interface Message {
   modeUsed: ModeUsed | null
 }
 
-function groundingLabel(modeUsed: ModeUsed, citations: Citation[]): string {
+function toGroundingLabel(modeUsed: ModeUsed, citations: Citation[]): GroundingLabel {
   if (modeUsed === 'evidence') return 'from your notes'
-  return citations.length > 0 ? 'general explanation + your notes' : 'general explanation'
+  return citations.length > 0 ? 'both' : 'general explanation'
 }
 
 function ChatView() {
@@ -79,9 +81,7 @@ function ChatView() {
           ) : (
             <div key={i} className="self-start rounded border px-3 py-2">
               <p className="text-xs font-semibold">ThoughtBridge</p>
-              {m.modeUsed && (
-                <p className="text-xs italic">{groundingLabel(m.modeUsed, m.citations)}</p>
-              )}
+              {m.modeUsed && <GroundingBadge grounding={toGroundingLabel(m.modeUsed, m.citations)} />}
               {m.content.split('\n\n').map((para, j) => (
                 <p key={j} className="mt-1 text-sm">
                   {para}
@@ -111,28 +111,7 @@ function ChatView() {
       </div>
 
       {activeCitation && (
-        <div className="rounded border px-3 py-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold">
-              Chunk {activeCitation.id} · artifact {activeCitation.artifact_id} · span{' '}
-              {activeCitation.span[0]}–{activeCitation.span[1]}
-            </p>
-            <button
-              type="button"
-              aria-label="Close citation"
-              onClick={() => setActiveCitation(null)}
-              className="text-xs underline"
-            >
-              Close
-            </button>
-          </div>
-          {activeCitation.source_type === 'tb_conversation' && (
-            <p aria-label="Conversation source" className="text-xs italic">
-              from a ThoughtBridge conversation
-            </p>
-          )}
-          <p className="mt-1 text-sm">{activeCitation.text}</p>
-        </div>
+        <CitationPanel chunk={activeCitation} onClose={() => setActiveCitation(null)} />
       )}
 
       <div className="flex gap-2">

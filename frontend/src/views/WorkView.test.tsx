@@ -313,4 +313,18 @@ describe('WorkView', () => {
     render(<WorkView />)
     expect(screen.getByText('Conversations are saved and retrievable.')).toBeDefined()
   })
+
+  it('citation panel badges conversation chunks', async () => {
+    await extractWith([
+      extractResponse(),
+      [],
+      chunkDetail({ source_type: 'tb_conversation', text: 'User: we decided quokka' }),
+    ])
+    expect(await screen.findByText('Might do X.')).toBeDefined()
+    fireEvent.click(screen.getAllByLabelText('Evidence chunk 7')[0])
+    expect(await screen.findByText('User: we decided quokka')).toBeDefined()
+    expect(screen.getByLabelText('Conversation source').textContent).toBe(
+      'from a ThoughtBridge conversation',
+    )
+  })
 })

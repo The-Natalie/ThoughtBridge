@@ -9,15 +9,21 @@ import {
   postExplainStream,
   postRegenerate,
 } from '../api/learn'
-import { postQuery } from '../api/query'
-import LearnerProfilePanel from './LearnerProfilePanel'
+import { getChunk, postQuery } from '../api/query'
 import type {
+  ChunkDetail,
+  Citation,
   ExplainRequest,
   ExplanationDetail,
   ExplanationSteps,
   ExplanationSummary,
+  GroundingLabel,
   LegacyMappingItem,
+  ModeUsed,
 } from '../api/types'
+import CitationPanel from '../components/CitationPanel'
+import GroundingBadge from '../components/GroundingBadge'
+import LearnerProfilePanel from './LearnerProfilePanel'
 
 const STEP_KEYS: (keyof ExplanationSteps)[] = [
   'definition',
@@ -42,6 +48,13 @@ const STEP_DISPLAY_NAMES: Record<keyof ExplanationSteps, string> = {
 interface ThreadEntry {
   question: string
   answer: string
+  citations: Citation[]
+  modeUsed: ModeUsed
+}
+
+function toGroundingLabel(modeUsed: ModeUsed, citations: Citation[]): GroundingLabel {
+  if (modeUsed === 'evidence') return 'from your notes'
+  return citations.length > 0 ? 'both' : 'general explanation'
 }
 
 /** Render one mapping passage; pre-prose rows fall back to their note text. */
@@ -56,6 +69,7 @@ function LearnView() {
   const [stepIndex, setStepIndex] = useState(0)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [threads, setThreads] = useState<Record<string, ThreadEntry[]>>({})
+  const [activeCitation, setActiveCitation] = useState<ChunkDetail | null>(null)
   const [conceptInput, setConceptInput] = useState('')
   const [hintInput, setHintInput] = useState('')
   const [askInput, setAskInput] = useState('')
@@ -163,13 +177,30 @@ function LearnView() {
       setConversationId(response.conversation_id)
       setThreads((prev) => ({
         ...prev,
-        [step]: [...(prev[step] ?? []), { question, answer: response.answer }],
+        [step]: [
+          ...(prev[step] ?? []),
+          {
+            question,
+            answer: response.answer,
+            citations: response.citations,
+            modeUsed: response.mode_used,
+          },
+        ],
       }))
       setAskInput('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function openCitation(chunkId: number) {
+    setError(null)
+    try {
+      setActiveCitation(await getChunk(chunkId))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
     }
   }
 
@@ -478,10 +509,33 @@ function LearnView() {
               {(threads[step] ?? []).map((t, i) => (
                 <div key={i} className="rounded border px-3 py-2">
                   <p className="text-xs font-semibold">You asked: {t.question}</p>
+                  <GroundingBadge grounding={toGroundingLabel(t.modeUsed, t.citations)} />
                   <p className="mt-1 text-sm">{t.answer}</p>
+                  {t.citations.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {t.citations.map((c) => (
+                        <button
+                          key={c.chunk_id}
+                          type="button"
+                          aria-label={`Citation ${c.chunk_id}`}
+                          onClick={() => void openCitation(c.chunk_id)}
+                          className="rounded border px-2 py-0.5 text-xs underline"
+                        >
+                          [{c.chunk_id}] {c.excerpt.slice(0, 40)}
+                          {c.source_type === 'tb_conversation' && (
+                            <span aria-label="Conversation source"> (from a ThoughtBridge conversation)</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
+          )}
+
+          {activeCitation && (
+            <CitationPanel chunk={activeCitation} onClose={() => setActiveCitation(null)} />
           )}
 
           {explanation && (

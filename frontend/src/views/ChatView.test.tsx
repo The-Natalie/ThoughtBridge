@@ -123,12 +123,14 @@ describe('ChatView', () => {
     expect(await screen.findByText('general explanation')).toBeDefined()
   })
 
-  it('badges cited teaching answers as blended', async () => {
+  // F-11 unification (checkpoint-prompt-provenance-visibility plan): blended
+  // teaching answers use the canonical PRD F-7 label `both`.
+  it('badges cited teaching answers as both', async () => {
     vi.stubGlobal('fetch', mockFetchSequence([queryResponse({ mode_used: 'teaching' })]))
     render(<ChatView />)
     fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'q?' } })
     fireEvent.click(screen.getByLabelText('Send'))
-    expect(await screen.findByText('general explanation + your notes')).toBeDefined()
+    expect(await screen.findByText('both')).toBeDefined()
   })
 
   it('shows no conversation badge for note citations', async () => {
