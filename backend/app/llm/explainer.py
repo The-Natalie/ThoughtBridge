@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ValidationError
@@ -32,7 +32,8 @@ from app.llm.qa import strip_fences
 
 logger = logging.getLogger(__name__)
 
-STAGE_A_MAX_TOKENS = 8192
+STAGE_D_MAX_TOKENS = 8192
+STAGE_F_MAX_TOKENS = 8192
 STAGE_B_MAX_TOKENS = 16384
 STAGE_C_MAX_TOKENS = 8192
 REGEN_MAX_TOKENS = 8192
@@ -40,6 +41,10 @@ REGEN_MAX_TOKENS = 8192
 # (messages, max_tokens) — different arity from qa.ChatFn on purpose: stage
 # budgets differ, so the budget travels with the call and the router adapts.
 ExplainerChatFn = Callable[[list[dict[str, str]], int], Awaitable[str]]
+
+# Streaming arity: yields raw content deltas in order; concatenating them must
+# equal the full stage response. Same budget-travels-with-call convention.
+StreamingChatFn = Callable[[list[dict[str, str]], int], AsyncIterator[str]]
 
 
 @dataclass
@@ -64,7 +69,17 @@ class ExplainerValidationError(ValueError):
     """A stage or regen model output failed schema validation (→ HTTP 502)."""
 
 
+class StageDOut(BaseModel):
+    definition: str
+
+
+class StageFOut(BaseModel):
+    familiar_system: str
+
+
 class StageAOut(BaseModel):
+    """Combined D+F pair — the exact input shape stage B consumes."""
+
     definition: str
     familiar_system: str
 
@@ -78,7 +93,6 @@ class StageBOut(BaseModel):
 class StageCOut(BaseModel):
     placement: str
     interview_ready: str
-    limitations: str
 
 
 class RegenOut(BaseModel):
@@ -173,17 +187,31 @@ async def generate_explanation(
     memory_fn: MemoryFn,
     persist_fn: PersistFn | None = None,
 ) -> ExplainedResult:
-    """Run the A→B→C chain and persist the versioned lesson (atomic)."""
+    """Run the D→F→B→C chain and persist the versioned lesson (atomic)."""
     profile_block = render_profile_block(profile_fn())
     memory = memory_fn(concept)
     memory_block = render_memory_block(memory)
     reused_from = memory.reused_from if memory is not None else None
 
-    raw_a = await chat_fn(
-        build_stage_messages("A", concept, hint, profile_block, memory_block, ""),
-        STAGE_A_MAX_TOKENS,
+    raw_d = await chat_fn(
+        build_stage_messages("D", concept, hint, profile_block, memory_block, "", False),
+        STAGE_D_MAX_TOKENS,
     )
-    stage_a = _parse_stage("A", raw_a, StageAOut)
+    stage_d = _parse_stage("D", raw_d, StageDOut)
+
+    raw_f = await chat_fn(
+        build_stage_messages(
+            "F",
+            concept,
+            hint,
+            profile_block,
+            memory_block,
+            json.dumps({"definition": stage_d.definition}),
+        ),
+        STAGE_F_MAX_TOKENS,
+    )
+    stage_f = _parse_stage("F", raw_f, StageFOut)
+    stage_a = StageAOut(definition=stage_d.definition, familiar_system=stage_f.familiar_system)
 
     raw_b = await chat_fn(
         build_stage_messages(
@@ -209,7 +237,6 @@ async def generate_explanation(
         "walkthrough": stage_b.walkthrough,
         "placement": stage_c.placement,
         "interview_ready": stage_c.interview_ready,
-        "limitations": stage_c.limitations,
     }
 
     if persist_fn is not None:
@@ -222,7 +249,7 @@ async def generate_explanation(
             version,
             steps,
             mapping_items,
-            stage_c.limitations,
+            "",
             reused_from,
         )
         explanation_id = detail.id
@@ -230,6 +257,212 @@ async def generate_explanation(
         "explainer generated: concept=%s id=%s reused_from=%s", concept, explanation_id, reused_from
     )
     return ExplainedResult(explanation_id=explanation_id, reused_from=reused_from, steps=steps)
+
+
+@dataclass
+class StreamEvent:
+    """One SSE-ready event from the streaming lesson generator."""
+
+    type: str
+    stage: str | None = None
+    text: str | None = None
+    steps: dict | None = None
+    explanation_id: str | None = None
+    reused_from: str | None = None
+    message: str | None = None
+
+    def to_json(self) -> str:
+        payload: dict[str, object] = {"type": self.type}
+        if self.stage is not None:
+            payload["stage"] = self.stage
+        if self.text is not None:
+            payload["text"] = self.text
+        if self.steps is not None:
+            payload["steps"] = self.steps
+        if self.explanation_id is not None:
+            payload["explanation_id"] = self.explanation_id
+        if self.reused_from is not None:
+            payload["reused_from"] = self.reused_from
+        if self.message is not None:
+            payload["message"] = self.message
+        return json.dumps(payload)
+
+
+async def generate_explanation_stream(
+    *,
+    concept: str,
+    hint: str | None,
+    db_path: str,
+    chat_fn: StreamingChatFn,
+    profile_fn: ProfileFn,
+    memory_fn: MemoryFn,
+    persist_fn: PersistFn | None = None,
+) -> AsyncIterator[StreamEvent]:
+    """Run the D→F→B→C chain, yielding token + validated-stage events.
+
+    Same prompts, order, validation, and atomic end-persist as
+    :func:`generate_explanation` — only the delivery differs. Yields
+    ``stage_started`` / ``token`` / ``stage_validated`` per stage, then
+    ``lesson_complete``. On any model or validation failure yields a single
+    ``error`` event instead (and persists nothing, exactly like today).
+    """
+    profile_block = render_profile_block(profile_fn())
+    memory = memory_fn(concept)
+    memory_block = render_memory_block(memory)
+    reused_from = memory.reused_from if memory is not None else None
+
+    async def run_stage(
+        stage: str, messages: list[dict[str, str]], budget: int, box: dict[str, str | None]
+    ) -> AsyncIterator[StreamEvent]:
+        """Yield started/token events live; stash concatenated raw in box (None on error)."""
+        box["raw"] = None
+        yield StreamEvent(type="stage_started", stage=stage)
+        parts: list[str] = []
+        try:
+            async for piece in chat_fn(messages, budget):
+                if piece:
+                    parts.append(piece)
+                    yield StreamEvent(type="token", stage=stage, text=piece)
+        except Exception as exc:  # noqa: BLE001 — any mid-stream chat failure becomes an error event.
+            yield StreamEvent(type="error", stage=stage, message=str(exc))
+            return
+        box["raw"] = "".join(parts)
+
+    # Stage D. Each stage below iterates run_stage directly so token events
+    # flow to the caller live; the box carries the concatenated raw text out.
+    box_d: dict[str, str | None] = {}
+    async for event in run_stage(
+        "D",
+        build_stage_messages("D", concept, hint, profile_block, memory_block, "", False),
+        STAGE_D_MAX_TOKENS,
+        box_d,
+    ):
+        yield event
+    raw_d = box_d["raw"]
+    if raw_d is None:
+        return
+    try:
+        stage_d = _parse_stage("D", raw_d, StageDOut)
+    except ExplainerValidationError as exc:
+        yield StreamEvent(type="error", stage="D", message=str(exc))
+        return
+    yield StreamEvent(type="stage_validated", stage="D", steps={"definition": stage_d.definition})
+
+    # Stage F (familiar system chosen with the validated definition as context).
+    box_f: dict[str, str | None] = {}
+    async for event in run_stage(
+        "F",
+        build_stage_messages(
+            "F",
+            concept,
+            hint,
+            profile_block,
+            memory_block,
+            json.dumps({"definition": stage_d.definition}),
+        ),
+        STAGE_F_MAX_TOKENS,
+        box_f,
+    ):
+        yield event
+    raw_f = box_f["raw"]
+    if raw_f is None:
+        return
+    try:
+        stage_f = _parse_stage("F", raw_f, StageFOut)
+    except ExplainerValidationError as exc:
+        yield StreamEvent(type="error", stage="F", message=str(exc))
+        return
+    stage_a = StageAOut(definition=stage_d.definition, familiar_system=stage_f.familiar_system)
+    yield StreamEvent(
+        type="stage_validated", stage="F", steps={"familiar_system": stage_f.familiar_system}
+    )
+
+    # Stage B.
+    box_b: dict[str, str | None] = {}
+    async for event in run_stage(
+        "B",
+        build_stage_messages(
+            "B", concept, hint, profile_block, memory_block, stage_a.model_dump_json()
+        ),
+        STAGE_B_MAX_TOKENS,
+        box_b,
+    ):
+        yield event
+    raw_b = box_b["raw"]
+    if raw_b is None:
+        return
+    try:
+        stage_b = _parse_stage("B", raw_b, StageBOut)
+    except ExplainerValidationError as exc:
+        yield StreamEvent(type="error", stage="B", message=str(exc))
+        return
+    yield StreamEvent(
+        type="stage_validated",
+        stage="B",
+        steps={
+            "analogy": stage_b.analogy,
+            "mapping": list(stage_b.mapping),
+            "walkthrough": stage_b.walkthrough,
+        },
+    )
+
+    # Stage C.
+    prior_ab = json.dumps({"stage_a": stage_a.model_dump(), "stage_b": stage_b.model_dump()})
+    box_c: dict[str, str | None] = {}
+    async for event in run_stage(
+        "C",
+        build_stage_messages("C", concept, hint, profile_block, memory_block, prior_ab),
+        STAGE_C_MAX_TOKENS,
+        box_c,
+    ):
+        yield event
+    raw_c = box_c["raw"]
+    if raw_c is None:
+        return
+    try:
+        stage_c = _parse_stage("C", raw_c, StageCOut)
+    except ExplainerValidationError as exc:
+        yield StreamEvent(type="error", stage="C", message=str(exc))
+        return
+    yield StreamEvent(
+        type="stage_validated",
+        stage="C",
+        steps={
+            "placement": stage_c.placement,
+            "interview_ready": stage_c.interview_ready,
+        },
+    )
+
+    mapping_items = list(stage_b.mapping)
+    steps: dict[str, object] = {
+        "definition": stage_a.definition,
+        "familiar_system": stage_a.familiar_system,
+        "analogy": stage_b.analogy,
+        "mapping": mapping_items,
+        "walkthrough": stage_b.walkthrough,
+        "placement": stage_c.placement,
+        "interview_ready": stage_c.interview_ready,
+    }
+    if persist_fn is not None:
+        explanation_id, _version = persist_fn(steps, reused_from)
+    else:
+        version = max_version_for_concept(db_path, concept) + 1
+        detail = create_explanation(
+            db_path,
+            concept,
+            version,
+            steps,
+            mapping_items,
+            "",
+            reused_from,
+        )
+        explanation_id = detail.id
+    logger.info(
+        "explainer streamed: concept=%s id=%s reused_from=%s", concept, explanation_id, reused_from
+    )
+    yield StreamEvent(
+        type="lesson_complete", explanation_id=explanation_id, reused_from=reused_from
+    )
 
 
 async def regenerate_step(
@@ -263,7 +496,8 @@ async def regenerate_step(
     merged: dict[str, object] = dict(source.steps)
     merged[step] = new_content
     mapping = merged["mapping"]
-    limitations = merged["limitations"]
+    # Lessons stored before Limitations was removed still carry it; new ones omit it.
+    limitations = merged.get("limitations", "")
     if not isinstance(mapping, list) or not isinstance(limitations, str):
         raise TypeError(f"source explanation {source.id} has malformed stored steps")
 

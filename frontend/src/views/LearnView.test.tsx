@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import type { ExplainResponse, ExplanationDetail, QueryResponse } from '../api/types'
 import LearnView from './LearnView'
@@ -15,7 +15,6 @@ const STEPS = {
   walkthrough: 'WALK',
   placement: 'PLACE',
   interview_ready: 'READY',
-  limitations: 'LIMITS',
 }
 
 function explainResponse(overrides: Partial<ExplainResponse> = {}): ExplainResponse {
@@ -56,6 +55,8 @@ function mockFetchSequence(payloads: unknown[]) {
   return vi.fn().mockImplementation(() => {
     const payload = queue.shift()
     if (payload instanceof Error) return Promise.reject(payload)
+    const streamed = (payload as { __stream?: unknown[] }).__stream
+    if (streamed !== undefined) return Promise.resolve(streamResponse(streamed))
     return Promise.resolve({
       ok: !(payload as { __notOk?: boolean }).__notOk,
       status: (payload as { __status?: number }).__status ?? 200,
@@ -65,11 +66,58 @@ function mockFetchSequence(payloads: unknown[]) {
   })
 }
 
+function streamResponse(events: unknown[]) {
+  const text = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n'
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    json: async () => ({}),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text))
+        controller.close()
+      },
+    }),
+  }
+}
+
+function streamEvents(
+  overrides: { explanation_id?: string; reused_from?: string | null } = {},
+) {
+  return [
+    { type: 'stage_started', stage: 'D' },
+    { type: 'stage_validated', stage: 'D', steps: { definition: 'DEF' } },
+    { type: 'stage_validated', stage: 'F', steps: { familiar_system: 'FAM' } },
+    {
+      type: 'stage_validated',
+      stage: 'B',
+      steps: { analogy: 'ANA', mapping: STEPS.mapping, walkthrough: 'WALK' },
+    },
+    {
+      type: 'stage_validated',
+      stage: 'C',
+      steps: { placement: 'PLACE', interview_ready: 'READY' },
+    },
+    {
+      type: 'lesson_complete',
+      explanation_id: overrides.explanation_id ?? 'exp-1',
+      reused_from: overrides.reused_from ?? null,
+    },
+  ]
+}
+
+function teachStream(overrides: { explanation_id?: string; reused_from?: string | null } = {}) {
+  return { __stream: streamEvents(overrides) }
+}
+
 async function teach(fetch: ReturnType<typeof mockFetchSequence>, concept = 'RAG') {
   render(<LearnView />)
   fireEvent.change(screen.getByLabelText('Concept'), { target: { value: concept } })
   fireEvent.click(screen.getByLabelText('Teach me'))
-  await screen.findByText('DEF')
+  // The ask box only renders once the completed explanation has loaded,
+  // so this also waits out the mid-generation pager.
+  await screen.findByLabelText('Ask about this step')
   return fetch
 }
 
@@ -90,23 +138,26 @@ describe('LearnView', () => {
     expect(screen.getByText('Lessons are saved and reusable.')).toBeDefined()
   })
 
-  it('teaches via POST-then-GET and shows the header from the GET payload', async () => {
-    const fetch = mockFetchSequence([explainResponse(), explanationDetail()])
+  it('teaches via stream-then-GET and shows the header from the GET payload', async () => {
+    const fetch = mockFetchSequence([teachStream(), explanationDetail()])
     vi.stubGlobal('fetch', fetch)
     await teach(fetch)
     expect(screen.getByLabelText('Lesson steps')).toBeDefined()
     expect(screen.getByLabelText('Step: definition')).toBeDefined()
-    expect(screen.getByLabelText('Step: limitations')).toBeDefined()
+    expect(screen.getByLabelText('Step: interview_ready')).toBeDefined()
+    expect(screen.queryByLabelText('Step: limitations')).toBeNull()
     expect(screen.getByRole('heading').textContent).toContain('RAG v1 explanation')
     expect(fetch.mock.calls.length).toBe(2)
-    expect(fetch.mock.calls[0][0]).toBe('http://localhost:8000/api/v1/learn/explain')
+    expect(fetch.mock.calls[0][0]).toBe('http://localhost:8000/api/v1/learn/explain/stream')
+    expect(fetch.mock.calls[0][1].method).toBe('POST')
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ concept: 'RAG' })
     expect(fetch.mock.calls[1][0]).toBe(
       'http://localhost:8000/api/v1/learn/explanations/exp-1',
     )
   })
 
   it('moves Next/Back without network calls', async () => {
-    const fetch = mockFetchSequence([explainResponse(), explanationDetail()])
+    const fetch = mockFetchSequence([teachStream(), explanationDetail()])
     vi.stubGlobal('fetch', fetch)
     await teach(fetch)
     expect(fetch.mock.calls.length).toBe(2)
@@ -120,7 +171,7 @@ describe('LearnView', () => {
 
   it('asks via teaching /query with context and threads the conversation', async () => {
     const fetch = mockFetchSequence([
-      explainResponse(),
+      teachStream(),
       explanationDetail(),
       queryResponse(),
       queryResponse({ answer: 'second answer' }),
@@ -150,7 +201,7 @@ describe('LearnView', () => {
   it('regenerates via POST-then-GET, keeping position', async () => {
     const v2Steps = { ...STEPS, analogy: 'ANA2' }
     const fetch = mockFetchSequence([
-      explainResponse(),
+      teachStream(),
       explanationDetail(),
       explainResponse({ explanation_id: 'exp-2' }),
       explanationDetail({ id: 'exp-2', version: 2, steps: v2Steps }),
@@ -181,10 +232,12 @@ describe('LearnView', () => {
     expect(screen.getByText('boom')).toBeDefined()
     fireEvent.click(screen.getByLabelText('Dismiss error'))
     expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByLabelText('Teach me')).toBeDefined()
+    expect(screen.queryByLabelText('Lesson steps')).toBeNull()
   })
 
   it('renders mapping as conversational passages', async () => {
-    const fetch = mockFetchSequence([explainResponse(), explanationDetail()])
+    const fetch = mockFetchSequence([teachStream(), explanationDetail()])
     vi.stubGlobal('fetch', fetch)
     await teach(fetch)
     fireEvent.click(screen.getByLabelText('Step: mapping'))
@@ -199,7 +252,7 @@ describe('LearnView', () => {
   it('renders pre-prose mapping rows best-effort', async () => {
     const legacy = { familiar: 'librarian', technical: 'retriever', note: 'finds things' }
     const fetch = mockFetchSequence([
-      explainResponse(),
+      teachStream(),
       explanationDetail({
         steps: { ...STEPS, mapping: [legacy] as unknown as string[] },
       }),
@@ -212,7 +265,7 @@ describe('LearnView', () => {
 
   it('marks the whole explanation as clicked with an optional note', async () => {
     const fetch = mockFetchSequence([
-      explainResponse(),
+      teachStream(),
       explanationDetail(),
       { marker_id: 'm-1', explanation_id: 'exp-1', scope: 'explanation', step: null },
     ])
@@ -237,7 +290,7 @@ describe('LearnView', () => {
   })
 
   it('marks the current step as clicked without a note key when empty', async () => {
-    const fetch = mockFetchSequence([explainResponse(), explanationDetail(), { marker_id: 'm-2' }])
+    const fetch = mockFetchSequence([teachStream(), explanationDetail(), { marker_id: 'm-2' }])
     vi.stubGlobal('fetch', fetch)
     await teach(fetch)
     fireEvent.click(screen.getByLabelText('Step: mapping'))
@@ -254,7 +307,7 @@ describe('LearnView', () => {
 
   it('shows a clicked-before notice with view-prior when reusing a marked explanation', async () => {
     const fetch = mockFetchSequence([
-      explainResponse({ explanation_id: 'exp-2', reused_from: 'exp-0' }),
+      teachStream({ explanation_id: 'exp-2', reused_from: 'exp-0' }),
       explanationDetail({ id: 'exp-2', version: 2 }),
       explanationDetail({ id: 'exp-0', version: 1 }),
       [
@@ -288,7 +341,7 @@ describe('LearnView', () => {
 
   it('shows a plain reuse notice when the prior explanation is unmarked', async () => {
     const fetch = mockFetchSequence([
-      explainResponse({ explanation_id: 'exp-2', reused_from: 'exp-0' }),
+      teachStream({ explanation_id: 'exp-2', reused_from: 'exp-0' }),
       explanationDetail({ id: 'exp-2', version: 2 }),
       explanationDetail({ id: 'exp-0', version: 1 }),
       [],
@@ -326,7 +379,7 @@ describe('LearnView', () => {
       },
     ]
     const fetch = mockFetchSequence([
-      explainResponse({ explanation_id: 'exp-2' }),
+      teachStream({ explanation_id: 'exp-2' }),
       explanationDetail({ id: 'exp-2', version: 2 }),
       history,
       explanationDetail({ id: 'exp-1', version: 1, steps: { ...STEPS, definition: 'V1-DEF' } }),
@@ -351,7 +404,7 @@ describe('LearnView', () => {
 
   it('renders a dismissible alert when marking fails', async () => {
     const fetch = mockFetchSequence([
-      explainResponse(),
+      teachStream(),
       explanationDetail(),
       new Error('mark boom'),
     ])
@@ -362,5 +415,137 @@ describe('LearnView', () => {
     expect(screen.getByText('mark boom')).toBeDefined()
     fireEvent.click(screen.getByLabelText('Dismiss error'))
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows the pager immediately and streams each tab as it validates', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      },
+    })
+    const send = (text: string) => controller.enqueue(new TextEncoder().encode(text))
+    const event = (e: unknown) => `data: ${JSON.stringify(e)}\n\n`
+    // Stream URL is intercepted below with the manually-driven body; the queue
+    // holds only the follow-up GET payloads.
+    const fetch = mockFetchSequence([explanationDetail()])
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/learn/explain/stream')) {
+          return Promise.resolve({ ok: true, status: 200, statusText: 'OK', body })
+        }
+        return fetch(url)
+      }),
+    )
+    render(<LearnView />)
+    fireEvent.change(screen.getByLabelText('Concept'), { target: { value: 'RAG' } })
+    fireEvent.click(screen.getByLabelText('Teach me'))
+    // Pager appears immediately with Definition selected and loading.
+    expect(await screen.findByLabelText('Lesson steps')).toBeDefined()
+    expect(screen.getByLabelText('Step: definition').getAttribute('aria-current')).toBe('step')
+    expect(screen.getByRole('heading').textContent).toContain('RAG (generating…)')
+    expect(screen.getByRole('status').textContent).toBe('Loading…')
+    // Unready tabs show the same loader; actions wait for completion.
+    fireEvent.click(screen.getByLabelText('Step: familiar_system'))
+    expect(screen.getByRole('status').textContent).toBe('Loading…')
+    expect(screen.queryByLabelText('Ask about this step')).toBeNull()
+    expect(screen.queryByLabelText('Show earlier versions')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Step: definition'))
+    // Definition tokens stream into the Definition tab.
+    send(event({ type: 'stage_started', stage: 'D' }))
+    send(event({ type: 'token', stage: 'D', text: '{"definition": "PARTIAL' }))
+    expect(await screen.findByText('PARTIAL')).toBeDefined()
+    // Validated stages replace tokens and fill their own tabs.
+    send(event({ type: 'stage_validated', stage: 'D', steps: { definition: 'FULL-DEF' } }))
+    expect(await screen.findByText('FULL-DEF')).toBeDefined()
+    expect(screen.queryByText('PARTIAL')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Step: familiar_system'))
+    expect(screen.getByRole('status').textContent).toBe('Loading…')
+    send(event({ type: 'stage_validated', stage: 'F', steps: { familiar_system: 'FAM' } }))
+    expect(await screen.findByText('FAM')).toBeDefined()
+    send(
+      event({
+        type: 'stage_validated',
+        stage: 'B',
+        steps: { analogy: 'ANA', mapping: STEPS.mapping, walkthrough: 'WALK' },
+      }),
+    )
+    send(
+      event({
+        type: 'stage_validated',
+        stage: 'C',
+        steps: { placement: 'PLACE', interview_ready: 'READY' },
+      }),
+    )
+    send(event({ type: 'lesson_complete', explanation_id: 'exp-1', reused_from: null }))
+    send('data: [DONE]\n\n')
+    controller.close()
+    // Completion swaps in the persisted payload with actions, no loaders.
+    expect(await screen.findByLabelText('Ask about this step')).toBeDefined()
+    expect(screen.getByRole('heading').textContent).toContain('RAG v1 explanation')
+    expect(screen.getByText('DEF')).toBeDefined()
+    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(screen.queryByText('FULL-DEF')).toBeNull()
+  })
+
+  it('cancels a generation in flight when starting over', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      },
+    })
+    const send = (text: string) => controller.enqueue(new TextEncoder().encode(text))
+    const event = (e: unknown) => `data: ${JSON.stringify(e)}\n\n`
+    const fetch = mockFetchSequence([explanationDetail()])
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/learn/explain/stream')) {
+          return Promise.resolve({ ok: true, status: 200, statusText: 'OK', body })
+        }
+        return fetch(url)
+      }),
+    )
+    render(<LearnView />)
+    fireEvent.change(screen.getByLabelText('Concept'), { target: { value: 'RAG' } })
+    fireEvent.click(screen.getByLabelText('Teach me'))
+    expect(await screen.findByLabelText('Lesson steps')).toBeDefined()
+    send(event({ type: 'token', stage: 'D', text: '{"definition": "PARTIAL' }))
+    expect(await screen.findByText('PARTIAL')).toBeDefined()
+    fireEvent.click(screen.getByLabelText('Start over'))
+    expect(screen.getByLabelText('Teach me')).toBeDefined()
+    expect(screen.queryByLabelText('Lesson steps')).toBeNull()
+    // Late stream events from the abandoned generation are ignored.
+    send(event({ type: 'lesson_complete', explanation_id: 'exp-1', reused_from: null }))
+    send('data: [DONE]\n\n')
+    controller.close()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.queryByLabelText('Lesson steps')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('shows a dismissible alert when the stream emits an error event', async () => {
+    const fetch = mockFetchSequence([
+      {
+        __stream: [
+          { type: 'stage_started', stage: 'D' },
+          { type: 'error', stage: 'D', message: 'stream boom' },
+        ],
+      },
+      explanationDetail(),
+    ])
+    vi.stubGlobal('fetch', fetch)
+    render(<LearnView />)
+    fireEvent.change(screen.getByLabelText('Concept'), { target: { value: 'RAG' } })
+    fireEvent.click(screen.getByLabelText('Teach me'))
+    expect(await screen.findByRole('alert')).toBeDefined()
+    expect(screen.getByText('stream boom')).toBeDefined()
+    expect(screen.getByLabelText('Teach me')).toBeDefined()
+    expect(screen.queryByLabelText('Lesson steps')).toBeNull()
   })
 })

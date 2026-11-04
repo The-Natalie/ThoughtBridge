@@ -7,7 +7,9 @@ health router wires settings to these params).
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import httpx
@@ -167,6 +169,83 @@ async def chat_completion(
             logger.warning("meta chat failed: status=%s detail=%s", 200, error)
             raise MetaAPIError(200, error) from None
         return content
+    finally:
+        if owned_client:
+            await http.aclose()
+
+
+async def stream_chat_completion(
+    *,
+    api_key: str,
+    model: str = DEFAULT_META_MODEL,
+    messages: list[dict[str, str]],
+    max_tokens: int = QA_MAX_TOKENS,
+    temperature: float = QA_TEMPERATURE,
+    base_url: str = META_API_BASE_URL,
+    timeout_s: float = CHAT_TIMEOUT_S,
+    client: httpx.AsyncClient | None = None,
+) -> AsyncIterator[str]:
+    """Stream one OpenAI-shaped chat completion; yield content deltas in order.
+
+    Same endpoint, JSON ``response_format``, and error contract as
+    :func:`chat_completion`, but with ``stream: true``: yields each choice
+    delta's content piece as it arrives, skipping heartbeat lines, ``[DONE]``,
+    and usage payloads. Raises ``MetaAPIError`` on transport failure, non-200
+    status, or an SSE line that is not valid JSON; concatenating the yields
+    equals the full response. The key never appears in errors.
+    """
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    owned_client = client is None
+    http = client if client is not None else httpx.AsyncClient(timeout=timeout_s)
+    try:
+        try:
+            async with http.stream("POST", url, headers=headers, json=body) as response:
+                if response.status_code != 200:
+                    body_bytes = await response.aread()
+                    error = (
+                        f"HTTP {response.status_code}: "
+                        f"{body_bytes[:MAX_ERROR_CHARS].decode(errors='replace')}"
+                    )
+                    logger.warning(
+                        "meta chat failed: status=%s detail=%s", response.status_code, error
+                    )
+                    raise MetaAPIError(response.status_code, error) from None
+                async for line in response.aiter_lines():
+                    text = line.strip()
+                    if not text or text.startswith(":") or text == "data: [DONE]":
+                        continue
+                    if not text.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(text[5:])
+                    except ValueError:
+                        error = f"invalid SSE line: {text[:MAX_ERROR_CHARS]}"
+                        logger.warning("meta chat failed: status=%s detail=%s", 200, error)
+                        raise MetaAPIError(200, error) from None
+                    if "usage" in event:
+                        continue
+                    for choice in event.get("choices", []):
+                        piece = (choice.get("delta") or {}).get("content") or ""
+                        if piece:
+                            yield piece
+        except httpx.TimeoutException:
+            error = f"timed out after {timeout_s}s"
+            logger.warning("meta chat failed: status=%s detail=%s", None, error)
+            raise MetaAPIError(None, error) from None
+        except httpx.HTTPError as exc:
+            error = str(exc)[:MAX_ERROR_CHARS]
+            logger.warning("meta chat failed: status=%s detail=%s", None, error)
+            raise MetaAPIError(None, error) from None
     finally:
         if owned_client:
             await http.aclose()

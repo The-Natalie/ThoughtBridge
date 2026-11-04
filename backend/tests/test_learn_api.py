@@ -35,7 +35,6 @@ STEPS = {
     "walkthrough": "w",
     "placement": "p",
     "interview_ready": "i",
-    "limitations": "l",
 }
 
 
@@ -238,19 +237,20 @@ def test_query_context_forces_teaching(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert response.json()["mode_used"] == "teaching"
     assert len(record) == 1
     assert any(
-        "In-progress eight-step lesson" in m["content"] for m in record[0] if m["role"] == "system"
+        "In-progress seven-step lesson" in m["content"] for m in record[0] if m["role"] == "system"
     )
 
 
 # --- Explanation memory (deliverable 2): real-repo tests over seeded tmp DBs ---
 
-STAGE_A = {"definition": "RAG defined.", "familiar_system": "A library."}
+STAGE_D = {"definition": "RAG defined."}
+STAGE_F = {"familiar_system": "A library."}
 STAGE_B = {
     "analogy": "Full analogy.",
     "mapping": ["X maps to Y because Z."],
     "walkthrough": "Walk.",
 }
-STAGE_C = {"placement": "Place.", "interview_ready": "Ready.", "limitations": "Limits."}
+STAGE_C = {"placement": "Place.", "interview_ready": "Ready."}
 
 
 def _mkexplanation(db: str, concept: str, version: int = 1, reused_from=None):
@@ -441,7 +441,7 @@ def test_explain_wires_real_memory_marked_preferred(
         box["older"] = older.id
 
     client, db = _seeded_client(monkeypatch, tmp_path, seed)
-    queue = [json.dumps(STAGE_A), json.dumps(STAGE_B), json.dumps(STAGE_C)]
+    queue = [json.dumps(STAGE_D), json.dumps(STAGE_F), json.dumps(STAGE_B), json.dumps(STAGE_C)]
 
     async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
         return queue.pop(0)
@@ -463,7 +463,7 @@ def test_explain_no_memory_returns_null_reused(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     client = _client(monkeypatch, tmp_path)
-    queue = [json.dumps(STAGE_A), json.dumps(STAGE_B), json.dumps(STAGE_C)]
+    queue = [json.dumps(STAGE_D), json.dumps(STAGE_F), json.dumps(STAGE_B), json.dumps(STAGE_C)]
 
     async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
         return queue.pop(0)
@@ -485,7 +485,8 @@ def test_explain_and_regen_create_no_markers(
 
     client, db = _seeded_client(monkeypatch, tmp_path, seed)
     queue = [
-        json.dumps(STAGE_A),
+        json.dumps(STAGE_D),
+        json.dumps(STAGE_F),
         json.dumps(STAGE_B),
         json.dumps(STAGE_C),
         json.dumps({"step": "analogy", "content": "NEW-ANALOGY"}),
@@ -607,7 +608,7 @@ def test_explain_wires_real_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         json={"emphasis": {"familiar_systems": False}, "how_i_learn": "WIRING-PROBE-TEXT"},
     )
     assert seeded.status_code == 200
-    queue = [json.dumps(STAGE_A), json.dumps(STAGE_B), json.dumps(STAGE_C)]
+    queue = [json.dumps(STAGE_D), json.dumps(STAGE_F), json.dumps(STAGE_B), json.dumps(STAGE_C)]
     record: list = []
 
     async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
@@ -618,7 +619,7 @@ def test_explain_wires_real_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     response = client.post("/api/v1/learn/explain", json={"concept": "RAG"})
     assert response.status_code == 200
     assert sorted(response.json()["steps"].keys()) == sorted(STEP_KEYS)
-    assert len(record) == 3
+    assert len(record) == 4
     stage_a = record[0][-1]["content"]
     assert "familiar-system grounding: de-emphasized" in stage_a
     assert "WIRING-PROBE-TEXT" in stage_a
@@ -636,7 +637,7 @@ def test_explain_defaults_when_profile_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     client = _client(monkeypatch, tmp_path)
-    queue = [json.dumps(STAGE_A), json.dumps(STAGE_B), json.dumps(STAGE_C)]
+    queue = [json.dumps(STAGE_D), json.dumps(STAGE_F), json.dumps(STAGE_B), json.dumps(STAGE_C)]
     record: list = []
 
     async def fake_chat(*, api_key: str, model: str, messages: list, **kw: object) -> str:
@@ -657,3 +658,83 @@ def test_explain_defaults_when_profile_unset(
     ):
         assert f"{label}: emphasized" in stage_a
     assert "How this learner learns best:" not in stage_a
+
+
+def _sse_data_lines(text: str) -> list[str]:
+    return [line[6:] for line in text.splitlines() if line.startswith("data: ")]
+
+
+def test_explain_stream_happy_path_sequence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.llm.explainer import StreamEvent
+
+    client = _client(monkeypatch, tmp_path)
+
+    async def fake_stream(**kwargs: object):
+        yield StreamEvent(type="stage_started", stage="D")
+        yield StreamEvent(type="token", stage="D", text='{"def')
+        yield StreamEvent(type="stage_validated", stage="D", steps={"definition": "d"})
+        yield StreamEvent(type="lesson_complete", explanation_id="exp-9", reused_from=None)
+
+    monkeypatch.setattr("app.api.learn.generate_explanation_stream", fake_stream)
+    response = client.post("/api/v1/learn/explain/stream", json={"concept": "RAG"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    lines = _sse_data_lines(response.text)
+    assert lines[-1] == "[DONE]"
+    events = [json.loads(line) for line in lines[:-1]]
+    assert [e["type"] for e in events] == [
+        "stage_started",
+        "token",
+        "stage_validated",
+        "lesson_complete",
+    ]
+    assert events[2]["steps"] == {"definition": "d"}
+    assert events[3]["explanation_id"] == "exp-9"
+
+
+def test_explain_stream_blank_concept_422(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+
+    async def boom(**kwargs: object):
+        raise AssertionError("stream must not start")
+        yield
+
+    monkeypatch.setattr("app.api.learn.generate_explanation_stream", boom)
+    response = client.post("/api/v1/learn/explain/stream", json={"concept": "   "})
+    assert response.status_code == 422
+
+
+def test_explain_stream_missing_key_502(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.delenv("MODEL_API_KEY")
+
+    async def boom(**kwargs: object):
+        raise AssertionError("stream must not start")
+        yield
+
+    monkeypatch.setattr("app.api.learn.generate_explanation_stream", boom)
+    response = client.post("/api/v1/learn/explain/stream", json={"concept": "RAG"})
+    assert response.status_code == 502
+
+
+def test_explain_stream_midway_failure_emits_error_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.llm.explainer import StreamEvent
+
+    client = _client(monkeypatch, tmp_path)
+
+    async def fake_stream(**kwargs: object):
+        yield StreamEvent(type="stage_started", stage="D")
+        raise ValueError("boom-midstream")
+
+    monkeypatch.setattr("app.api.learn.generate_explanation_stream", fake_stream)
+    response = client.post("/api/v1/learn/explain/stream", json={"concept": "RAG"})
+    assert response.status_code == 200
+    lines = _sse_data_lines(response.text)
+    assert lines[-1] == "[DONE]"
+    events = [json.loads(line) for line in lines[:-1]]
+    assert events[-1]["type"] == "error"
+    assert "boom-midstream" in events[-1]["message"]

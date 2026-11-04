@@ -77,7 +77,6 @@ export interface ExplanationSteps {
   walkthrough: string
   placement: string
   interview_ready: string
-  limitations: string
 }
 
 export interface ExplainResponse {
@@ -181,4 +180,14 @@ export interface ExtractFact {
 
 export interface ExtractResponse {
   facts: ExtractFact[]
+}
+
+export interface ExplainStreamEvent {
+  type: string
+  stage?: string
+  text?: string
+  steps?: Record<string, unknown>
+  explanation_id?: string
+  reused_from?: string | null
+  message?: string
 }

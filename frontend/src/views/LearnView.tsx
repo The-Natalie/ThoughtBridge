@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import {
   createMarker,
+  extractPartialDefinition,
   getExplanation,
   listExplanations,
   listMarkers,
-  postExplain,
+  postExplainStream,
   postRegenerate,
 } from '../api/learn'
 import { postQuery } from '../api/query'
@@ -26,7 +27,6 @@ const STEP_KEYS: (keyof ExplanationSteps)[] = [
   'walkthrough',
   'placement',
   'interview_ready',
-  'limitations',
 ]
 
 const STEP_DISPLAY_NAMES: Record<keyof ExplanationSteps, string> = {
@@ -37,7 +37,6 @@ const STEP_DISPLAY_NAMES: Record<keyof ExplanationSteps, string> = {
   walkthrough: 'Walkthrough',
   placement: 'Placement',
   interview_ready: 'Interview-ready',
-  limitations: 'Limitations',
 }
 
 interface ThreadEntry {
@@ -68,18 +67,50 @@ function LearnView() {
   const [notice, setNotice] = useState<{ text: string; priorId: string } | null>(null)
   const [history, setHistory] = useState<ExplanationSummary[] | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [streamingDef, setStreamingDef] = useState<string | null>(null)
+  const [streamedSteps, setStreamedSteps] = useState<Partial<ExplanationSteps>>({})
+  const [activeConcept, setActiveConcept] = useState<string | null>(null)
+  const genRef = useRef(0)
 
   async function teach() {
     const concept = conceptInput.trim()
     if (!concept || loading) return
+    genRef.current += 1
+    const gen = genRef.current
     setLoading(true)
     setError(null)
+    setStreamingDef(null)
+    setStreamedSteps({})
+    setActiveConcept(concept)
+    setStepIndex(0)
     try {
       const req: ExplainRequest = hintInput.trim()
         ? { concept, familiar_system_hint: hintInput.trim() }
         : { concept }
-      const response = await postExplain(req)
-      const detail = await getExplanation(response.explanation_id)
+      let rawDef = ''
+      let completed: { explanation_id: string; reused_from: string | null } | null = null
+      await postExplainStream(req, (event) => {
+        if (gen !== genRef.current) return
+        if (event.type === 'token' && event.stage === 'D' && event.text) {
+          rawDef += event.text
+          const text = extractPartialDefinition(rawDef)
+          if (text) setStreamingDef(text)
+        } else if (event.type === 'stage_validated' && event.steps) {
+          const steps = event.steps as Partial<ExplanationSteps>
+          if (event.stage === 'D' && typeof steps.definition === 'string') {
+            setStreamingDef(steps.definition)
+          }
+          setStreamedSteps((prev) => ({ ...prev, ...steps }))
+        } else if (event.type === 'lesson_complete' && event.explanation_id) {
+          completed = { explanation_id: event.explanation_id, reused_from: event.reused_from ?? null }
+        } else if (event.type === 'error') {
+          throw new Error(event.message || 'Generation failed')
+        }
+      })
+      if (gen !== genRef.current) return
+      if (!completed) throw new Error('Generation ended without completing')
+      const done: { explanation_id: string; reused_from: string | null } = completed
+      const detail = await getExplanation(done.explanation_id)
       setExplanation(detail)
       setStepIndex(0)
       setThreads({})
@@ -90,22 +121,29 @@ function LearnView() {
       setNotice(null)
       setHistory(null)
       setHistoryOpen(false)
-      if (response.reused_from) {
+      setStreamingDef(null)
+      setStreamedSteps({})
+      setActiveConcept(null)
+      if (done.reused_from) {
         const [, markers] = await Promise.all([
-          getExplanation(response.reused_from),
-          listMarkers(response.reused_from),
+          getExplanation(done.reused_from),
+          listMarkers(done.reused_from),
         ])
         setNotice({
           text: markers.some((m) => m.scope === 'explanation')
             ? 'This builds on an explanation that clicked for you before.'
             : 'This builds on your earlier explanation.',
-          priorId: response.reused_from,
+          priorId: done.reused_from,
         })
       }
     } catch (err) {
+      if (gen !== genRef.current) return
       setError(err instanceof Error ? err.message : 'Request failed')
+      setStreamingDef(null)
+      setStreamedSteps({})
+      setActiveConcept(null)
     } finally {
-      setLoading(false)
+      if (gen === genRef.current) setLoading(false)
     }
   }
 
@@ -241,6 +279,11 @@ function LearnView() {
   }
 
   function startOver() {
+    genRef.current += 1
+    setLoading(false)
+    setActiveConcept(null)
+    setStreamingDef(null)
+    setStreamedSteps({})
     setExplanation(null)
     setStepIndex(0)
     setThreads({})
@@ -258,6 +301,10 @@ function LearnView() {
   }
 
   const step = STEP_KEYS[stepIndex]
+  const generating = activeConcept !== null && explanation === null
+  const viewSteps: Partial<ExplanationSteps> = explanation
+    ? explanation.steps
+    : { ...streamedSteps, ...(streamingDef ? { definition: streamingDef } : {}) }
 
   return (
     <div className="flex flex-col gap-4">
@@ -270,7 +317,7 @@ function LearnView() {
         </div>
       )}
 
-      {!explanation ? (
+      {!(explanation || activeConcept) ? (
         <div className="flex flex-col gap-2">
           <LearnerProfilePanel />
           <input
@@ -309,14 +356,20 @@ function LearnView() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">
-              {explanation.concept} v{explanation.version} explanation{' '}
-              {explanation.id.slice(0, 8)}…
+              {explanation ? (
+                <>
+                  {explanation.concept} v{explanation.version} explanation{' '}
+                  {explanation.id.slice(0, 8)}…
+                </>
+              ) : (
+                <>{activeConcept} (generating…)</>
+              )}
             </h2>
             <button
               type="button"
               aria-label="Start over"
               onClick={startOver}
-              disabled={loading}
+              disabled={loading && !generating}
               className="rounded border px-3 py-1 text-sm"
             >
               Start over
@@ -350,7 +403,7 @@ function LearnView() {
                 aria-label={`Step: ${key}`}
                 aria-current={i === stepIndex ? 'step' : undefined}
                 onClick={() => setStepIndex(i)}
-                disabled={loading}
+                disabled={loading && !generating}
                 className={`rounded border px-2 py-0.5 text-xs ${
                   i === stepIndex ? 'font-semibold underline' : ''
                 }`}
@@ -363,22 +416,33 @@ function LearnView() {
           <div className="rounded border px-3 py-2">
             <p className="text-xs font-semibold">{STEP_DISPLAY_NAMES[step]}</p>
             {step === 'mapping' ? (
-              <div className="flex flex-col gap-2">
-                {explanation.steps.mapping.map((m, i) => (
-                  <p key={i} className="mt-1 text-sm">
-                    {mappingText(m)}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              (explanation.steps[step] as string).split('\n\n').map((para, j) => (
+              Array.isArray(viewSteps.mapping) ? (
+                <div className="flex flex-col gap-2">
+                  {viewSteps.mapping.map((m, i) => (
+                    <p key={i} className="mt-1 text-sm">
+                      {mappingText(m)}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p role="status" className="mt-1 text-sm">
+                  Loading…
+                </p>
+              )
+            ) : typeof viewSteps[step] === 'string' ? (
+              (viewSteps[step] as string).split('\n\n').map((para, j) => (
                 <p key={j} className="mt-1 text-sm">
                   {para}
                 </p>
               ))
+            ) : (
+              <p role="status" className="mt-1 text-sm">
+                Loading…
+              </p>
             )}
           </div>
 
+          {explanation && (
           <div className="flex gap-2">
             <input
               aria-label="What clicked (optional note)"
@@ -407,6 +471,7 @@ function LearnView() {
               {stepMarked[step] ? 'Clicked ✓' : 'This step clicked'}
             </button>
           </div>
+          )}
 
           {(threads[step] ?? []).length > 0 && (
             <div aria-label={`Questions about ${step}`} className="flex flex-col gap-2">
@@ -419,6 +484,7 @@ function LearnView() {
             </div>
           )}
 
+          {explanation && (
           <div className="flex gap-2">
             <input
               aria-label="Ask about this step"
@@ -450,13 +516,14 @@ function LearnView() {
               Regenerate this step
             </button>
           </div>
+          )}
 
           <div className="flex gap-2">
             <button
               type="button"
               aria-label="Previous step"
               onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
-              disabled={loading || stepIndex === 0}
+              disabled={(loading && !generating) || stepIndex === 0}
               className="rounded border px-3 py-1 text-sm"
             >
               Back
@@ -465,13 +532,14 @@ function LearnView() {
               type="button"
               aria-label="Next step"
               onClick={() => setStepIndex((i) => Math.min(STEP_KEYS.length - 1, i + 1))}
-              disabled={loading || stepIndex === STEP_KEYS.length - 1}
+              disabled={(loading && !generating) || stepIndex === STEP_KEYS.length - 1}
               className="rounded border px-3 py-1 text-sm"
             >
               Next
             </button>
           </div>
 
+          {explanation && (
           <div className="flex flex-col gap-2">
             <button
               type="button"
@@ -501,6 +569,7 @@ function LearnView() {
               </div>
             )}
           </div>
+          )}
         </div>
       )}
 

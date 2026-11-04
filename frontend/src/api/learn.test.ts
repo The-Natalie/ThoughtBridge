@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createMarker,
+  extractPartialDefinition,
   getExplanation,
   getLearnerProfile,
   listExplanations,
   listMarkers,
   postExplain,
+  postExplainStream,
   postRegenerate,
   updateLearnerProfile,
 } from './learn'
@@ -18,6 +20,25 @@ function mockFetch(payload: unknown, ok = true, status = 200, statusText = 'OK')
     statusText,
     json: async () => payload,
   })
+}
+
+function mockStreamFetch(frames: string[], ok = true, status = 200, statusText = 'OK') {
+  const body =
+    frames.length === 0
+      ? null
+      : new ReadableStream({
+          start(controller) {
+            for (const frame of frames) {
+              controller.enqueue(new TextEncoder().encode(frame))
+            }
+            controller.close()
+          },
+        })
+  return vi.fn().mockResolvedValue({ ok, status, statusText, body })
+}
+
+function sseEvent(event: unknown): string {
+  return `data: ${JSON.stringify(event)}\n\n`
 }
 
 describe('learn client', () => {
@@ -112,5 +133,55 @@ describe('learn client', () => {
       emphasis: { interactions: false },
       how_i_learn: 'x',
     })
+  })
+
+  it('postExplainStream POSTs to the stream endpoint and dispatches events in order', async () => {
+    const events = [
+      { type: 'stage_started', stage: 'D' },
+      { type: 'token', stage: 'D', text: 'hi' },
+      { type: 'lesson_complete', explanation_id: 'e', reused_from: null },
+    ]
+    const fetch = mockStreamFetch([...events.map(sseEvent), 'data: [DONE]\n\n'])
+    vi.stubGlobal('fetch', fetch)
+    const seen: unknown[] = []
+    await postExplainStream({ concept: 'RAG' }, (e) => seen.push(e))
+    expect(fetch).toHaveBeenCalledOnce()
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('http://localhost:8000/api/v1/learn/explain/stream')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ concept: 'RAG' })
+    expect(seen).toEqual(events)
+  })
+
+  it('postExplainStream reassembles events split across chunks', async () => {
+    const full = sseEvent({ type: 'token', stage: 'D', text: 'split-me' })
+    const fetch = mockStreamFetch([full.slice(0, 10), full.slice(10), 'data: [DONE]\n\n'])
+    vi.stubGlobal('fetch', fetch)
+    const seen: unknown[] = []
+    await postExplainStream({ concept: 'RAG' }, (e) => seen.push(e))
+    expect(seen).toEqual([{ type: 'token', stage: 'D', text: 'split-me' }])
+  })
+
+  it('postExplainStream rejects on non-OK responses', async () => {
+    vi.stubGlobal('fetch', mockStreamFetch(['data: [DONE]\n\n'], false, 502, 'Bad Gateway'))
+    await expect(postExplainStream({ concept: 'RAG' }, () => {})).rejects.toThrow(
+      'API request failed: 502 Bad Gateway',
+    )
+  })
+
+  it('extractPartialDefinition returns null until the value starts', () => {
+    expect(extractPartialDefinition('')).toBeNull()
+    expect(extractPartialDefinition('{"def')).toBeNull()
+    expect(extractPartialDefinition('{"definition": ')).toBeNull()
+    expect(extractPartialDefinition('{"definition": "')).toBeNull()
+  })
+
+  it('extractPartialDefinition reads partial and closed strings with escapes', () => {
+    expect(extractPartialDefinition('{"definition": "Hello')).toBe('Hello')
+    expect(extractPartialDefinition('{"definition": "Hello"}')).toBe('Hello')
+    expect(extractPartialDefinition('{"definition": "a\\"b')).toBe('a"b')
+    expect(extractPartialDefinition('{"definition": "line\\nbreak')).toBe('line\nbreak')
+    expect(extractPartialDefinition('{"definition": "trail\\')).toBe('trail')
+    expect(extractPartialDefinition('{"other": 1, "definition": "late')).toBe('late')
   })
 })

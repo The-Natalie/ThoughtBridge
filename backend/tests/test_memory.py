@@ -36,7 +36,6 @@ def _seed(
         "walkthrough": "w",
         "placement": "p",
         "interview_ready": "i",
-        "limitations": "l",
     }
     return create_explanation(db, concept, version, steps, list(MAPPING), "l", reused_from)
 

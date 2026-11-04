@@ -1,10 +1,12 @@
 """Learning endpoints — thin router over llm/explainer + explanations.
 
-`POST /learn/explain` runs the 3-stage explainer; `GET /learn/explanations/{id}`
+`POST /learn/explain` runs the staged explainer; `POST /learn/explain/stream`
+streams the same generation as SSE events; `GET /learn/explanations/{id}`
 fetches one stored version; `POST /learn/explanations/{id}/regenerate`
 regenerates one step as a new version.
 
-Test seams: ``chat_completion``, ``get_explanation``, ``generate_explanation``,
+Test seams: ``chat_completion``, ``stream_chat_completion``,
+``get_explanation``, ``generate_explanation``, ``generate_explanation_stream``,
 ``regenerate_step``, ``build_memory_context``, ``list_explanations``,
 ``create_marker``, ``list_markers``, ``get_learner_profile``,
 ``update_learner_profile``, and ``read_learner_context`` are imported BY NAME
@@ -15,15 +17,22 @@ the query/ingest/retrieval router seams).
 from __future__ import annotations
 
 import functools
+import json
 import logging
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.grounding import STEP_KEYS
-from app.core.meta_client import DEFAULT_META_MODEL, MetaAPIError, chat_completion
+from app.core.meta_client import (
+    DEFAULT_META_MODEL,
+    MetaAPIError,
+    chat_completion,
+    stream_chat_completion,
+)
 from app.db.explanations import (
     create_marker,
     get_explanation,
@@ -38,6 +47,7 @@ from app.db.learner_profile import (
 from app.llm.explainer import (
     ExplainerValidationError,
     generate_explanation,
+    generate_explanation_stream,
     read_learner_context,
     regenerate_step,
 )
@@ -138,9 +148,27 @@ def _make_chat_fn(settings, model_wanted: str):
     return chat_fn
 
 
+def _make_stream_chat_fn(settings, model_wanted: str):
+    """Build the (messages, budget) streaming chat closure over the Meta client."""
+
+    async def chat_fn(messages: list[dict[str, str]], max_tokens: int):
+        key = settings.model_api_key.get_secret_value()
+        if not key:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="MODEL_API_KEY not configured",
+            )
+        async for piece in stream_chat_completion(
+            api_key=key, model=model_wanted, messages=messages, max_tokens=max_tokens
+        ):
+            yield piece
+
+    return chat_fn
+
+
 @router.post("/learn/explain", response_model=ExplainResponse)
 async def post_explain(body: ExplainRequest) -> ExplainResponse:
-    """Teach a concept: 3-stage generation persisted as a new version."""
+    """Teach a concept: staged generation persisted as a new version."""
     if not body.concept.strip():
         logger.warning("explain rejected: blank concept")
         raise HTTPException(status_code=422, detail="concept must not be blank")
@@ -173,6 +201,42 @@ async def post_explain(body: ExplainRequest) -> ExplainResponse:
         reused_from=result.reused_from,
         steps=result.steps,
     )
+
+
+@router.post("/learn/explain/stream")
+async def post_explain_stream(body: ExplainRequest) -> StreamingResponse:
+    """Teach a concept, streaming stage events as SSE (same generation as explain)."""
+    if not body.concept.strip():
+        logger.warning("explain stream rejected: blank concept")
+        raise HTTPException(status_code=422, detail="concept must not be blank")
+    settings = get_settings()
+    if not settings.model_api_key.get_secret_value():
+        # Eager: a missing key must be a real 502, not a 200 stream with an error event.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="MODEL_API_KEY not configured",
+        )
+    db_path = settings.database_path
+    model_wanted = settings.meta_model or DEFAULT_META_MODEL
+
+    async def event_source():
+        try:
+            async for event in generate_explanation_stream(
+                concept=body.concept,
+                hint=body.familiar_system_hint,
+                db_path=db_path,
+                chat_fn=_make_stream_chat_fn(settings, model_wanted),
+                profile_fn=functools.partial(read_learner_context, db_path),
+                memory_fn=functools.partial(build_memory_context, db_path),
+            ):
+                yield f"data: {event.to_json()}\n\n"
+        except Exception as exc:  # noqa: BLE001 — a stream must always terminate with an event.
+            logger.warning("explain stream failed: %s: %s", type(exc).__name__, exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    logger.info("explain stream started: concept=%s", body.concept)
+    return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
 @router.get("/learn/explanations", response_model=list[ExplanationSummaryOut])

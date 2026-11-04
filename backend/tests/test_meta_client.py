@@ -21,6 +21,7 @@ from app.core.meta_client import (
     ProbeResult,
     chat_completion,
     check_meta_reachability,
+    stream_chat_completion,
 )
 
 CANARY = "canary-key-xyz"
@@ -248,3 +249,61 @@ def test_chat_base_url_trailing_slash_tolerated() -> None:
         return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
 
     assert _chat(handler, base_url="https://x.test/v1/") == "ok"
+
+
+def _stream(handler: Callable[[httpx.Request], httpx.Response], **kwargs: Any) -> list[str]:
+    async def run() -> list[str]:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        params: dict[str, Any] = {
+            "api_key": CANARY,
+            "messages": CHAT_MESSAGES,
+            "client": client,
+        }
+        params.update(kwargs)
+        return [piece async for piece in stream_chat_completion(**params)]
+
+    return asyncio.run(run())
+
+
+def _sse(*lines: str) -> bytes:
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_stream_yields_deltas_and_sends_contract() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        assert request.headers["Authorization"] == f"Bearer {CANARY}"
+        sent = json.loads(request.content.decode())
+        assert sent["stream"] is True
+        assert sent["response_format"] == {"type": "json_object"}
+        body = _sse(
+            ": heartbeat",
+            "",
+            'data: {"choices": [{"delta": {"role": "assistant"}}]}',
+            'data: {"choices": [{"delta": {"content": "Hel"}}]}',
+            'data: {"choices": [{"delta": {}}]}',
+            'data: {"choices": [{"delta": {"content": "lo"}}]}',
+            'data: {"usage": {"completion_tokens": 5}}',
+            "data: [DONE]",
+        )
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    assert _stream(handler) == ["Hel", "lo"]
+
+
+def test_stream_non_200_raises_with_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="bad" * 100)
+
+    with pytest.raises(MetaAPIError) as excinfo:
+        _stream(handler)
+    assert excinfo.value.status_code == 500
+    assert CANARY not in str(excinfo.value)
+
+
+def test_stream_invalid_sse_line_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_sse('data: {"choices": []}', "data: not-json{{{"))
+
+    with pytest.raises(MetaAPIError, match="invalid SSE line"):
+        _stream(handler)
