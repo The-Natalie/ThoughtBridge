@@ -64,6 +64,11 @@ export interface ConversationDeleteResponse {
   unlinked: Record<string, number>
 }
 
+export interface ArtifactDeleteResponse {
+  deleted: Record<string, number>
+  unlinked: Record<string, number>
+}
+
 export interface ExplainRequest {
   concept: string
   familiar_system_hint?: string | null

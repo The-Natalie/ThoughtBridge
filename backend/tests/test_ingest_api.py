@@ -402,3 +402,61 @@ def test_exact_boundary_chars(monkeypatch: pytest.MonkeyPatch, tmp_path: object)
         == 413
     )
     assert len(client.get("/api/v1/artifacts").json()) == 1
+
+
+def test_delete_artifact_happy_path_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/v1/artifacts",
+        json={"source_type": "note", "title": "t", "content": "quokka deployment ledger"},
+    )
+    assert created.status_code == 201
+    chunks = created.json()["chunks"]
+    response = client.delete(f"/api/v1/artifacts/{created.json()['artifact_id']}")
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted": {"artifacts": 1, "chunks": chunks, "facts": 0},
+        "unlinked": {"facts": 0},
+    }
+
+
+def test_delete_unknown_artifact_is_404(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/v1/artifacts",
+        json={"source_type": "note", "title": "t", "content": "harbor tide schedule"},
+    )
+    assert created.status_code == 201
+    response = client.delete(f"/api/v1/artifacts/{'0' * 32}")
+    assert response.status_code == 404
+    assert len(client.get("/api/v1/artifacts").json()) == 1
+
+
+def test_delete_artifact_twice_second_is_404(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/v1/artifacts",
+        json={"source_type": "note", "title": "t", "content": "quokka deployment ledger"},
+    )
+    assert created.status_code == 201
+    first = client.delete(f"/api/v1/artifacts/{created.json()['artifact_id']}")
+    assert first.status_code == 200
+    second = client.delete(f"/api/v1/artifacts/{created.json()['artifact_id']}")
+    assert second.status_code == 404
+
+
+def test_get_artifact_after_delete_is_404(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/v1/artifacts",
+        json={"source_type": "note", "title": "t", "content": "quokka deployment ledger"},
+    )
+    assert created.status_code == 201
+    assert client.delete(f"/api/v1/artifacts/{created.json()['artifact_id']}").status_code == 200
+    assert client.get(f"/api/v1/artifacts/{created.json()['artifact_id']}").status_code == 404

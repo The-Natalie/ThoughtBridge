@@ -40,7 +40,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   )
 }
 
-/** Typed DELETE helper. Conversation (and future artifact) deletes go through here. */
+/** Typed DELETE helper. Conversation and artifact deletes go through here. */
 export async function apiDelete<T>(path: string): Promise<T> {
   return parseJson<T>(
     await fetch(apiUrl(path), {

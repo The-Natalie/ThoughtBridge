@@ -20,7 +20,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.db.artifacts import get_artifact_detail, list_artifacts
+from app.db.artifacts import delete_artifacts_cascade, get_artifact_detail, list_artifacts
 from app.db.connection import EmbeddingDimMismatchError
 from app.ingest.adapters import (
     UndecodableUploadError,
@@ -81,6 +81,11 @@ class ArtifactDetailOut(BaseModel):
     chunks: list[ArtifactChunkOut]
     fact_ids: list[str]
     interpretation_ids: list[str]
+
+
+class ArtifactDeleteOut(BaseModel):
+    deleted: dict[str, int]
+    unlinked: dict[str, int]
 
 
 @router.post("/artifacts", response_model=ArtifactCreated, status_code=status.HTTP_201_CREATED)
@@ -196,4 +201,20 @@ def get_artifact_endpoint(artifact_id: str) -> ArtifactDetailOut:
         ],
         fact_ids=detail.fact_ids,
         interpretation_ids=detail.interpretation_ids,
+    )
+
+
+@router.delete("/artifacts/{artifact_id}", response_model=ArtifactDeleteOut)
+def delete_artifact_endpoint(artifact_id: str) -> ArtifactDeleteOut:
+    """Delete an artifact with full derived cascade (chunks, orphaned facts)."""
+    counts = delete_artifacts_cascade(get_settings().database_path, [artifact_id])
+    if counts["artifacts"] == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="artifact not found")
+    return ArtifactDeleteOut(
+        deleted={
+            "artifacts": 1,
+            "chunks": counts["chunks"],
+            "facts": counts["facts"],
+        },
+        unlinked={"facts": counts["unlinked_facts"]},
     )
