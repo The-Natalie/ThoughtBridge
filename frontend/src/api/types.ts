@@ -149,6 +149,20 @@ export interface LearnerProfileUpdate {
   how_i_learn?: string
 }
 
+export interface CareerProfile {
+  current_role: string
+  past_roles: string[]
+  target_career: string
+  target_position: string
+}
+
+export interface CareerProfileUpdate {
+  current_role?: string
+  past_roles?: string[]
+  target_career?: string
+  target_position?: string
+}
+
 export interface ArtifactSummary {
   id: string
   title: string

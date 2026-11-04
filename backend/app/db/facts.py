@@ -95,3 +95,106 @@ def create_facts(
         prompt_version,
     )
     return [fact_id for fact_id, _, _ in items]
+
+
+@dataclass
+class FactLinkRead:
+    to_fact: str
+    relation: str
+
+
+@dataclass
+class FactRead:
+    fact_id: str
+    kind: str
+    status: str
+    summary: str
+    skills: list[str]
+    confidence: float
+    chunk_ids: list[int]
+    links: list[FactLinkRead]
+    created_at: str
+
+
+def _clean_skills(raw: str) -> list[str]:
+    """Parse a stored skills JSON array defensively (never raises)."""
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [skill for skill in parsed if isinstance(skill, str)]
+
+
+def _matches_q(summary: str, skills: list[str], q: str) -> bool:
+    """Every whitespace-split term (casefold) appears in summary or a skill."""
+    haystacks = [summary.casefold(), *(skill.casefold() for skill in skills)]
+    return all(any(term in hay for hay in haystacks) for term in q.split())
+
+
+def _matches_skill(skills: list[str], skill: str) -> bool:
+    """Some skill casefold-equals the wanted tag (exact match, not substring)."""
+    wanted = skill.strip().casefold()
+    return any(entry.casefold() == wanted for entry in skills)
+
+
+def list_accomplishments(
+    db_path: str,
+    *,
+    q: str | None = None,
+    skill: str | None = None,
+) -> list[FactRead]:
+    """List kind='accomplishment' facts, newest first, with evidence + links.
+
+    Pure read (zero writes): retention is independent of relevance. ``q``
+    and ``skill`` are query-time-only filters (AND-combined); ``None`` means
+    no constraint. The router rejects blank filters before they reach here;
+    a blank ``q`` would vacuously match everything and a blank ``skill``
+    would match nothing, so callers must validate first.
+    """
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, kind, status, summary, skills, confidence, created_at"
+            " FROM facts WHERE kind = 'accomplishment'"
+            " ORDER BY created_at DESC, id ASC",
+        ).fetchall()
+        chunk_rows = conn.execute(
+            "SELECT fact_id, chunk_id FROM fact_chunks ORDER BY chunk_id",
+        ).fetchall()
+        link_rows = conn.execute(
+            "SELECT from_fact_id, to_fact_id, relation FROM fact_links"
+            " ORDER BY to_fact_id, relation",
+        ).fetchall()
+    finally:
+        conn.close()
+    chunks_by_fact: dict[str, list[int]] = {}
+    for row in chunk_rows:
+        chunks_by_fact.setdefault(row["fact_id"], []).append(row["chunk_id"])
+    links_by_fact: dict[str, list[FactLinkRead]] = {}
+    for row in link_rows:
+        links_by_fact.setdefault(row["from_fact_id"], []).append(
+            FactLinkRead(to_fact=row["to_fact_id"], relation=row["relation"])
+        )
+    results: list[FactRead] = []
+    for row in rows:
+        skills = _clean_skills(row["skills"])
+        if q is not None and not _matches_q(row["summary"], skills, q):
+            continue
+        if skill is not None and not _matches_skill(skills, skill):
+            continue
+        results.append(
+            FactRead(
+                fact_id=row["id"],
+                kind=row["kind"],
+                status=row["status"],
+                summary=row["summary"],
+                skills=skills,
+                confidence=row["confidence"],
+                chunk_ids=chunks_by_fact.get(row["id"], []),
+                links=links_by_fact.get(row["id"], []),
+                created_at=row["created_at"],
+            )
+        )
+    return results

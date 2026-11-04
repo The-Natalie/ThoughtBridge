@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 
 import { listArtifacts } from '../api/artifacts'
 import { getChunk } from '../api/query'
-import { postExtract } from '../api/work'
+import { listAccomplishments, postExtract } from '../api/work'
 import type { ArtifactSummary, ChunkDetail, ExtractFact, ExtractResponse } from '../api/types'
+import FactCard from '../components/FactCard'
+import CareerProfilePanel from './CareerProfilePanel'
 
 type StatusFilter = 'all' | 'proposed' | 'rejected' | 'completed'
 
@@ -18,6 +20,11 @@ function WorkView() {
   const [highlightedFact, setHighlightedFact] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [accomplishments, setAccomplishments] = useState<ExtractFact[] | null>(null)
+  const [accFiltered, setAccFiltered] = useState(false)
+  const [accLoading, setAccLoading] = useState(false)
+  const [accQ, setAccQ] = useState('')
+  const [accSkill, setAccSkill] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -35,9 +42,43 @@ function WorkView() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setAccLoading(true)
+      try {
+        const items = await listAccomplishments()
+        if (!cancelled) {
+          setAccomplishments(items)
+          setAccFiltered(false)
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Request failed')
+      } finally {
+        if (!cancelled) setAccLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const selectedIds = Object.keys(selected)
     .filter((id) => selected[id])
     .sort()
+
+  async function loadAccomplishments(q?: string, skill?: string, filtered = false) {
+    setAccLoading(true)
+    try {
+      setAccomplishments(await listAccomplishments(q, skill))
+      setAccFiltered(filtered)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setAccLoading(false)
+    }
+  }
 
   async function extract() {
     if (selectedIds.length === 0 || loading) return
@@ -49,11 +90,18 @@ function WorkView() {
       setStatusFilter('all')
       setActiveCitation(null)
       setHighlightedFact(null)
+      await loadAccomplishments()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed')
     } finally {
       setLoading(false)
     }
+  }
+
+  function searchAccomplishments() {
+    const q = accQ.trim() === '' ? undefined : accQ
+    const skill = accSkill.trim() === '' ? undefined : accSkill
+    void loadAccomplishments(q, skill, q !== undefined || skill !== undefined)
   }
 
   async function openCitation(chunkId: number) {
@@ -65,9 +113,9 @@ function WorkView() {
     }
   }
 
-  function followLink(toFact: string) {
+  function followLink(toFact: string, prefix = 'fact-') {
     setHighlightedFact(toFact)
-    document.getElementById(`fact-${toFact}`)?.scrollIntoView?.()
+    document.getElementById(`${prefix}${toFact}`)?.scrollIntoView?.()
   }
 
   function toggle(id: string) {
@@ -81,10 +129,6 @@ function WorkView() {
         ? result.facts
         : result.facts.filter((f) => f.status === statusFilter)
 
-  function factSummary(factId: string): string {
-    return result?.facts.find((f) => f.fact_id === factId)?.summary ?? factId.slice(0, 8)
-  }
-
   return (
     <div className="flex flex-col gap-4">
       {error && (
@@ -95,6 +139,8 @@ function WorkView() {
           </button>
         </div>
       )}
+
+      <CareerProfilePanel />
 
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-semibold">Artifacts to extract</legend>
@@ -160,63 +206,81 @@ function WorkView() {
             ) : (
               <div aria-label="Extracted facts" className="flex flex-col gap-3">
                 {visibleFacts.map((fact) => (
-                  <div
+                  <FactCard
                     key={fact.fact_id}
-                    id={`fact-${fact.fact_id}`}
-                    aria-label={`Fact ${fact.fact_id.slice(0, 8)}`}
-                    className={`rounded border px-3 py-2 ${
-                      fact.fact_id === highlightedFact ? 'ring-2 font-semibold' : ''
-                    }`}
-                  >
-                    <p className="text-xs font-semibold">
-                      {fact.kind} · {fact.status} · {Math.round(fact.confidence * 100)}%
-                    </p>
-                    <p className="mt-1 text-sm">{fact.summary}</p>
-                    {fact.skills.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {fact.skills.map((s) => (
-                          <span key={s} className="rounded border px-2 py-0.5 text-xs">
-                            {s}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {fact.chunk_ids.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {fact.chunk_ids.map((id) => (
-                          <button
-                            key={id}
-                            type="button"
-                            aria-label={`Evidence chunk ${id}`}
-                            onClick={() => void openCitation(id)}
-                            className="rounded border px-2 py-0.5 text-xs underline"
-                          >
-                            [{id}]
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {fact.links.length > 0 && (
-                      <div className="mt-2 flex flex-col gap-1">
-                        {fact.links.map((link) => (
-                          <button
-                            key={`${link.to_fact}-${link.relation}`}
-                            type="button"
-                            aria-label={`Reasoning link ${link.relation} to ${link.to_fact.slice(0, 8)}`}
-                            onClick={() => followLink(link.to_fact)}
-                            className="text-left text-xs underline"
-                          >
-                            {link.relation} → {factSummary(link.to_fact).slice(0, 80)}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                    fact={fact}
+                    siblings={result?.facts ?? []}
+                    highlighted={fact.fact_id === highlightedFact}
+                    idPrefix="fact-"
+                    onOpenCitation={(id) => void openCitation(id)}
+                    onFollowLink={(to) => followLink(to, 'fact-')}
+                  />
                 ))}
               </div>
             )}
           </div>
         ))}
+
+      <section aria-label="Saved accomplishments" className="flex flex-col gap-2">
+        <h2 className="text-sm font-semibold">Saved accomplishments</h2>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-sm">
+            Filter accomplishments by keyword
+            <input
+              type="text"
+              aria-label="Filter accomplishments by keyword"
+              value={accQ}
+              onChange={(e) => setAccQ(e.target.value)}
+              disabled={accLoading}
+              className="rounded border px-3 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Filter accomplishments by skill
+            <input
+              type="text"
+              aria-label="Filter accomplishments by skill"
+              value={accSkill}
+              onChange={(e) => setAccSkill(e.target.value)}
+              disabled={accLoading}
+              className="rounded border px-3 py-1 text-sm"
+            />
+          </label>
+          <button
+            type="button"
+            aria-label="Search accomplishments"
+            onClick={searchAccomplishments}
+            disabled={accLoading}
+            className="rounded border px-3 py-1 text-sm"
+          >
+            Search
+          </button>
+        </div>
+
+        {accomplishments === null ? (
+          <p className="text-sm">Loading saved accomplishments…</p>
+        ) : accomplishments.length === 0 ? (
+          accFiltered ? (
+            <p className="text-sm">No accomplishments match this filter.</p>
+          ) : (
+            <p className="text-sm">No saved accomplishments yet — run Extract first.</p>
+          )
+        ) : (
+          <div className="flex flex-col gap-3">
+            {accomplishments.map((fact) => (
+              <FactCard
+                key={fact.fact_id}
+                fact={fact}
+                siblings={accomplishments}
+                highlighted={fact.fact_id === highlightedFact}
+                idPrefix="acc-"
+                onOpenCitation={(id) => void openCitation(id)}
+                onFollowLink={(to) => followLink(to, 'acc-')}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       {activeCitation && (
         <div className="rounded border px-3 py-2">

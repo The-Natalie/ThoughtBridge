@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 import type {
   ArtifactSummary,
@@ -78,7 +78,8 @@ function mockFetchSequence(payloads: unknown[]) {
 }
 
 async function extractWith(factsPayloads: unknown[], artifactsPayload: unknown = [artifactSummary()]) {
-  const fetch = mockFetchSequence([artifactsPayload, ...factsPayloads])
+  // Mount fires two GETs (artifacts, then accomplishments); callers append [] after each extract POST.
+  const fetch = mockFetchSequence([artifactsPayload, [], ...factsPayloads])
   vi.stubGlobal('fetch', fetch)
   render(<WorkView />)
   expect(await screen.findByLabelText('Select artifact Dev log')).toBeDefined()
@@ -97,7 +98,7 @@ describe('WorkView', () => {
   it('mount lists artifacts with checkboxes', async () => {
     vi.stubGlobal(
       'fetch',
-      mockFetchSequence([[artifactSummary(), artifactSummary({ id: 'art-2', title: 'Log 2' })]]),
+      mockFetchSequence([[artifactSummary(), artifactSummary({ id: 'art-2', title: 'Log 2' })], []]),
     )
     render(<WorkView />)
     expect(await screen.findByLabelText('Select artifact Dev log')).toBeDefined()
@@ -106,7 +107,7 @@ describe('WorkView', () => {
   })
 
   it('extract is disabled with none selected', () => {
-    vi.stubGlobal('fetch', mockFetchSequence([[artifactSummary()]]))
+    vi.stubGlobal('fetch', mockFetchSequence([[artifactSummary()], []]))
     render(<WorkView />)
     expect((screen.getByLabelText('Extract') as HTMLButtonElement).disabled).toBe(true)
   })
@@ -114,7 +115,9 @@ describe('WorkView', () => {
   it('select two and Extract POSTs sorted ids and renders fact cards', async () => {
     const fetch = mockFetchSequence([
       [artifactSummary({ id: 'b-id', title: 'Log B' }), artifactSummary({ id: 'a-id', title: 'Log A' })],
+      [],
       extractResponse(),
+      [],
     ])
     vi.stubGlobal('fetch', fetch)
     render(<WorkView />)
@@ -125,25 +128,25 @@ describe('WorkView', () => {
     expect(await screen.findByText('Might do X.')).toBeDefined()
     expect(screen.getByText('Rejected Y.')).toBeDefined()
     expect(screen.getByText('Shipped Z.')).toBeDefined()
-    expect(fetch.mock.calls[1][0]).toBe('http://localhost:8000/api/v1/work/extract')
-    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ artifact_ids: ['a-id', 'b-id'] })
+    expect(fetch.mock.calls[2][0]).toBe('http://localhost:8000/api/v1/work/extract')
+    expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({ artifact_ids: ['a-id', 'b-id'] })
   })
 
   it('status filter chips narrow the cards without refetching', async () => {
-    const fetch = await extractWith([extractResponse()])
+    const fetch = await extractWith([extractResponse(), []])
     expect(await screen.findByText('Might do X.')).toBeDefined()
-    expect(fetch.mock.calls.length).toBe(2)
+    expect(fetch.mock.calls.length).toBe(4)
     fireEvent.click(screen.getByLabelText('Filter: completed'))
     expect(screen.queryByText('Might do X.')).toBeNull()
     expect(screen.getByText('Shipped Z.')).toBeDefined()
     expect(screen.getAllByLabelText(/^Fact /).length).toBe(1)
     fireEvent.click(screen.getByLabelText('Filter: all'))
     expect(screen.getAllByLabelText(/^Fact /).length).toBe(3)
-    expect(fetch.mock.calls.length).toBe(2)
+    expect(fetch.mock.calls.length).toBe(4)
   })
 
   it('evidence chip opens the chunk panel and Close dismisses it', async () => {
-    await extractWith([extractResponse(), chunkDetail()])
+    await extractWith([extractResponse(), [], chunkDetail()])
     expect(await screen.findByText('Might do X.')).toBeDefined()
     fireEvent.click(screen.getAllByLabelText('Evidence chunk 7')[0])
     expect(await screen.findByText('full chunk text here')).toBeDefined()
@@ -152,7 +155,7 @@ describe('WorkView', () => {
   })
 
   it('reasoning-link click highlights the target card', async () => {
-    await extractWith([extractResponse()])
+    await extractWith([extractResponse(), []])
     expect(await screen.findByText('Shipped Z.')).toBeDefined()
     fireEvent.click(screen.getByLabelText('Reasoning link decided to bbbbbbbb'))
     const target = screen.getByLabelText('Fact bbbbbbbb')
@@ -160,7 +163,7 @@ describe('WorkView', () => {
   })
 
   it('empty facts result shows the status line and no error', async () => {
-    await extractWith([extractResponse({ facts: [] })])
+    await extractWith([extractResponse({ facts: [] }), []])
     expect(
       await screen.findByText('Nothing extractable found in the selected artifacts.'),
     ).toBeDefined()
@@ -175,7 +178,7 @@ describe('WorkView', () => {
   })
 
   it('empty artifact list shows the capture-first hint', async () => {
-    vi.stubGlobal('fetch', mockFetchSequence([[]]))
+    vi.stubGlobal('fetch', mockFetchSequence([[], []]))
     render(<WorkView />)
     expect(await screen.findByText('No artifacts yet — capture notes first.')).toBeDefined()
   })
@@ -184,11 +187,123 @@ describe('WorkView', () => {
     const completedOnly = extractResponse({
       facts: [extractFact({ fact_id: 'c'.repeat(32), status: 'completed', summary: 'Done.' })],
     })
-    await extractWith([completedOnly])
+    await extractWith([completedOnly, []])
     expect(await screen.findByText('Done.')).toBeDefined()
     fireEvent.click(screen.getByLabelText('Filter: proposed'))
     expect(screen.getByText('No facts with this status.')).toBeDefined()
     expect(screen.queryAllByLabelText(/^Fact /).length).toBe(0)
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('mount fetches accomplishments bare and renders browser cards', async () => {
+    const saved = [
+      extractFact({ fact_id: 'd'.repeat(32), summary: 'Browser fact one.' }),
+      extractFact({ fact_id: 'e'.repeat(32), summary: 'Browser fact two.' }),
+    ]
+    const fetch = mockFetchSequence([[artifactSummary()], saved])
+    vi.stubGlobal('fetch', fetch)
+    render(<WorkView />)
+    expect(await screen.findByText('Browser fact one.')).toBeDefined()
+    const browser = screen.getByLabelText('Saved accomplishments')
+    expect(within(browser).getByText('Browser fact two.')).toBeDefined()
+    expect(fetch.mock.calls[1][0]).toBe('http://localhost:8000/api/v1/work/accomplishments')
+  })
+
+  it('keyword search GETs encoded q and re-renders', async () => {
+    const fetch = mockFetchSequence([
+      [artifactSummary()],
+      [extractFact({ fact_id: 'd'.repeat(32), summary: 'Browser fact one.' })],
+      [extractFact({ fact_id: 'e'.repeat(32), summary: 'Filtered fact.' })],
+    ])
+    vi.stubGlobal('fetch', fetch)
+    render(<WorkView />)
+    expect(await screen.findByText('Browser fact one.')).toBeDefined()
+    fireEvent.change(screen.getByLabelText('Filter accomplishments by keyword'), {
+      target: { value: 'ci/cd' },
+    })
+    fireEvent.click(screen.getByLabelText('Search accomplishments'))
+    expect(await screen.findByText('Filtered fact.')).toBeDefined()
+    expect(screen.queryByText('Browser fact one.')).toBeNull()
+    expect(fetch.mock.calls[2][0]).toBe(
+      'http://localhost:8000/api/v1/work/accomplishments?q=ci%2Fcd',
+    )
+  })
+
+  it('skill search GETs the skill param', async () => {
+    const fetch = mockFetchSequence([
+      [artifactSummary()],
+      [extractFact({ fact_id: 'd'.repeat(32), summary: 'Browser fact one.' })],
+      [extractFact({ fact_id: 'e'.repeat(32), summary: 'Skilled fact.' })],
+    ])
+    vi.stubGlobal('fetch', fetch)
+    render(<WorkView />)
+    expect(await screen.findByText('Browser fact one.')).toBeDefined()
+    fireEvent.change(screen.getByLabelText('Filter accomplishments by skill'), {
+      target: { value: 'writing' },
+    })
+    fireEvent.click(screen.getByLabelText('Search accomplishments'))
+    expect(await screen.findByText('Skilled fact.')).toBeDefined()
+    expect(fetch.mock.calls[2][0]).toBe(
+      'http://localhost:8000/api/v1/work/accomplishments?skill=writing',
+    )
+  })
+
+  it('unfiltered empty browser shows the run-extract hint', async () => {
+    vi.stubGlobal('fetch', mockFetchSequence([[artifactSummary()], []]))
+    render(<WorkView />)
+    expect(
+      await screen.findByText('No saved accomplishments yet — run Extract first.'),
+    ).toBeDefined()
+  })
+
+  it('filtered empty browser shows the no-match line', async () => {
+    const fetch = mockFetchSequence([
+      [artifactSummary()],
+      [extractFact({ fact_id: 'd'.repeat(32), summary: 'Browser fact one.' })],
+      [],
+    ])
+    vi.stubGlobal('fetch', fetch)
+    render(<WorkView />)
+    expect(await screen.findByText('Browser fact one.')).toBeDefined()
+    fireEvent.change(screen.getByLabelText('Filter accomplishments by keyword'), {
+      target: { value: 'nonsense-zzz' },
+    })
+    fireEvent.click(screen.getByLabelText('Search accomplishments'))
+    expect(await screen.findByText('No accomplishments match this filter.')).toBeDefined()
+    expect(fetch.mock.calls[2][0]).toBe(
+      'http://localhost:8000/api/v1/work/accomplishments?q=nonsense-zzz',
+    )
+  })
+
+  it('successful extract refetches accomplishments bare', async () => {
+    const bare = 'http://localhost:8000/api/v1/work/accomplishments'
+    const fetch = await extractWith([extractResponse(), []])
+    expect(await screen.findByText('Might do X.')).toBeDefined()
+    const bareCalls = fetch.mock.calls.filter((call) => call[0] === bare)
+    expect(bareCalls.length).toBe(2)
+  })
+
+  it('browser reasoning-link click highlights the acc-prefixed target', async () => {
+    const target = extractFact({ fact_id: 'b'.repeat(32), summary: 'Browser target.' })
+    const source = extractFact({
+      fact_id: 'a'.repeat(32),
+      summary: 'Browser source.',
+      links: [{ to_fact: 'b'.repeat(32), relation: 'decided' }],
+    })
+    vi.stubGlobal('fetch', mockFetchSequence([[artifactSummary()], [source, target]]))
+    render(<WorkView />)
+    expect(await screen.findByText('Browser source.')).toBeDefined()
+    const browser = screen.getByLabelText('Saved accomplishments')
+    fireEvent.click(within(browser).getByLabelText('Reasoning link decided to bbbbbbbb'))
+    const card = within(browser).getByLabelText('Fact bbbbbbbb')
+    expect(card.className).toContain('ring-2')
+    expect(card.id).toBe(`acc-${'b'.repeat(32)}`)
+  })
+
+  it('browser fetch failure surfaces the alert', async () => {
+    vi.stubGlobal('fetch', mockFetchSequence([[artifactSummary()], new Error('acc down')]))
+    render(<WorkView />)
+    expect(await screen.findByRole('alert')).toBeDefined()
+    expect(screen.getByText('acc down')).toBeDefined()
   })
 })
