@@ -24,6 +24,7 @@ from app.db.artifacts import get_artifact_detail, list_artifacts
 from app.db.connection import EmbeddingDimMismatchError
 from app.ingest.adapters import (
     UndecodableUploadError,
+    UnparseableUploadError,
     UnsupportedSuffixError,
     adapt_text,
     adapt_upload,
@@ -50,6 +51,7 @@ class UploadCreated(BaseModel):
     artifact_id: str
     chunks: int
     extracted_chars: int
+    pages: int | None = None
 
 
 class ArtifactListItem(BaseModel):
@@ -112,7 +114,7 @@ def create_artifact(body: ArtifactCreate) -> ArtifactCreated:
 
 @router.post("/artifacts/upload", response_model=UploadCreated, status_code=status.HTTP_201_CREATED)
 def upload_artifact(file: UploadFile = File(...)) -> UploadCreated:  # noqa: B008
-    """Ingest a `.txt`/`.md` file upload as a new artifact."""
+    """Ingest a `.txt`/`.md`/`.pdf`/`.docx` file upload as a new artifact."""
     settings = get_settings()
     max_bytes = settings.max_upload_mb * 1024 * 1024
     raw = file.file.read(max_bytes + 1)
@@ -124,7 +126,7 @@ def upload_artifact(file: UploadFile = File(...)) -> UploadCreated:  # noqa: B00
         )
     try:
         adapted = adapt_upload(file.filename or "", file.content_type, raw)
-    except (UnsupportedSuffixError, UndecodableUploadError) as exc:
+    except (UnsupportedSuffixError, UndecodableUploadError, UnparseableUploadError) as exc:
         logger.warning("upload rejected: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if not adapted.content.strip():
@@ -152,6 +154,7 @@ def upload_artifact(file: UploadFile = File(...)) -> UploadCreated:  # noqa: B00
         artifact_id=result.artifact_id,
         chunks=result.chunk_count,
         extracted_chars=len(adapted.content),
+        pages=int(adapted.origin["pages"]) if "pages" in adapted.origin else None,
     )
 
 

@@ -17,7 +17,11 @@ from datetime import UTC, datetime
 
 from app.db.artifacts import store_artifact
 from app.db.connection import check_embedding_dim
-from app.ingest.adapters import UndecodableUploadError, UnsupportedSuffixError
+from app.ingest.adapters import (
+    UndecodableUploadError,
+    UnparseableUploadError,
+    UnsupportedSuffixError,
+)
 from app.ingest.chunker import chunk_text
 from app.retrieval.embedder import EMBEDDING_DIM, EmbedFn, embed_passages
 
@@ -27,6 +31,7 @@ __all__ = [
     "ArtifactTooLargeError",
     "IngestResult",
     "UndecodableUploadError",
+    "UnparseableUploadError",
     "UnsupportedSuffixError",
     "ingest_source",
 ]

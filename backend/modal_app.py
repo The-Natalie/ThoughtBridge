@@ -39,6 +39,8 @@ image = (
         "httpx>=0.28",
         "pydantic>=2.6",
         "pydantic-settings>=2.9",
+        "pypdf",
+        "python-docx",
         "sqlite-vec>=0.1",
         "fastembed",
         "python-multipart",

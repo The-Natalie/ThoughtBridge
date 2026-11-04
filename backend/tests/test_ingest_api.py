@@ -12,6 +12,7 @@ import app.ingest.pipeline as pipeline_mod
 from app.core.config import Settings, get_settings
 from app.db.connection import EmbeddingDimMismatchError, connect, init_db
 from app.main import create_app
+from tests.upload_fixtures import blank_pdf_bytes, docx_bytes, minimal_pdf_bytes
 
 DIM = 384
 
@@ -141,12 +142,104 @@ def test_upload_md_uppercase_returns_201(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert response.status_code == 201
 
 
-def test_upload_pdf_is_400(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+def test_upload_pdf_returns_201_with_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
     client = _client(monkeypatch, tmp_path)
     response = client.post(
-        "/api/v1/artifacts/upload", files={"file": ("x.pdf", b"stuff", "application/pdf")}
+        "/api/v1/artifacts/upload",
+        files={
+            "file": ("doc.pdf", minimal_pdf_bytes(["alpha page", "beta page"]), "application/pdf")
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["chunks"] >= 1
+    assert body["extracted_chars"] == len("alpha page\n\nbeta page")
+    assert body["pages"] == 2
+    detail = client.get(f"/api/v1/artifacts/{body['artifact_id']}").json()
+    assert detail["content"] == "alpha page\n\nbeta page"
+    assert detail["origin"]["adapter"] == "pdf"
+    assert detail["origin"]["pages"] == "2"
+
+
+def test_upload_docx_returns_201_without_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    client = _client(monkeypatch, tmp_path)
+    raw = docx_bytes(["gamma para"], [[["h1", "h2"], ["v1", "v2"]]])
+    response = client.post(
+        "/api/v1/artifacts/upload",
+        files={
+            "file": (
+                "notes.docx",
+                raw,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["chunks"] >= 1
+    assert body["extracted_chars"] == len("gamma para\nh1 | h2\nv1 | v2")
+    assert body["pages"] is None
+    detail = client.get(f"/api/v1/artifacts/{body['artifact_id']}").json()
+    assert detail["content"] == "gamma para\nh1 | h2\nv1 | v2"
+    assert detail["origin"]["adapter"] == "docx"
+
+
+def test_upload_corrupt_pdf_is_400(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/v1/artifacts/upload",
+        files={"file": ("evil.pdf", b"%PDF-1.4 garbage", "application/pdf")},
     )
     assert response.status_code == 400
+    assert "readable PDF" in response.json()["detail"]
+    assert client.get("/api/v1/artifacts").json() == []
+
+
+def test_upload_corrupt_docx_is_400(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/v1/artifacts/upload",
+        files={"file": ("evil.docx", b"not a zip", "application/octet-stream")},
+    )
+    assert response.status_code == 400
+    assert "not a valid .docx" in response.json()["detail"]
+    assert client.get("/api/v1/artifacts").json() == []
+
+
+def test_upload_blank_pdf_is_400(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/v1/artifacts/upload",
+        files={"file": ("blank.pdf", blank_pdf_bytes(), "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "file content blank"
+    assert client.get("/api/v1/artifacts").json() == []
+
+
+def test_upload_pdf_over_char_cap_is_413(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    client = _client(monkeypatch, tmp_path, MAX_ARTIFACT_CHARS="10")
+    response = client.post(
+        "/api/v1/artifacts/upload",
+        files={
+            "file": ("big.pdf", minimal_pdf_bytes(["way more than ten chars"]), "application/pdf")
+        },
+    )
+    assert response.status_code == 413
+    assert client.get("/api/v1/artifacts").json() == []
+
+
+def test_upload_txt_pages_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/v1/artifacts/upload", files={"file": ("note.txt", b"plain text", "text/plain")}
+    )
+    assert response.status_code == 201
+    assert response.json()["pages"] is None
 
 
 def test_upload_invalid_utf8_is_400(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
